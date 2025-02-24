@@ -34,10 +34,17 @@ bool print_available_interfaces(){
         return true;
 }
 
-bool get_input_params(int argc, char *argv[], char** interface, int* wait, char** target){
+bool get_input_params(int argc, char *argv[], char** interface, int* wait, char** target, char** udp_ports_string, char** tcp_ports_string){
+
+        bool interface_input = false;
+        bool target_input = false;
+        bool wait_input = false;
+        
 	static struct option long_options[] = {
 		{"interface", optional_argument, NULL, 'i'},
 		{"wait", optional_argument, NULL, 'w'},
+		{"pt", optional_argument, NULL, 't'},
+		{"pu", optional_argument, NULL, 'u'},
 		{0, 0, 0, 0}
 	};
 
@@ -45,11 +52,15 @@ bool get_input_params(int argc, char *argv[], char** interface, int* wait, char*
 	while((flag = getopt_long(argc, argv, "i::w:", long_options, NULL)) != -1){
 		switch(flag){
 			case 'i':
-			        if(optarg){
-				        *interface = optarg;
-				}else if(optind < argc && argv[optind][0] != '-'){
-				        *interface = argv[optind];
-                                        optind++;
+                                if(optind < argc && argv[optind][0] != '-'){
+                                        if(!interface_input){
+				                *interface = argv[optind];
+                                                optind++;
+                                                interface_input = true;
+                                        }else{
+                                                printf("Don't do the input interface thingy multiple times dumbass.");
+                                                return false;
+                                        }
 				}else{
 				        if(!print_available_interfaces()){
 				                return false;
@@ -58,12 +69,20 @@ bool get_input_params(int argc, char *argv[], char** interface, int* wait, char*
 				break;
 			case 'w':
 			        if(optarg && isdigit(*optarg)){
-			                *wait = atoi(optarg);
+			                if(!wait_input){
+			                        *wait = atoi(optarg);
+			                        wait_input = true;
+			                }else{
+			                        printf("Don't do the input timeout thingy multiple times dumbass.");
+                                                return false;
+			                }
 			        }else{
 			                printf("Timeout has to be a nubmer. \n");
 			                return false;
 			        }
 			        break;
+			case 't':
+			
 			case '?':
 				printf("What the heeeeeeeel, oh my god no wayay. \n");
 				return false;
