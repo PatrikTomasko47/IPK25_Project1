@@ -19,6 +19,30 @@ typedef enum {
     TYPE_DOMAIN
 } target_type;
 
+target_type determine_target_type(char *target){
+        struct in_addr ipv4_addr;
+        struct in6_addr ipv6_addr;
+        
+        if (inet_pton(AF_INET, target, &ipv4_addr)){
+                return TYPE_IPV4;
+        }
+        
+        if (inet_pton(AF_INET6, target, &ipv6_addr)){
+                return TYPE_IPV6;
+        }
+        
+        regex_t regex;
+        if (regcomp(&regex, DOMAIN_REGEX, REG_EXTENDED | REG_NOSUB) == 0) {
+                int match = regexec(&regex, target, 0, NULL, 0);
+                regfree(&regex);
+                if (match == 0){
+                        return TYPE_DOMAIN;
+                }
+        }
+        
+        return TYPE_UNKNOWN;
+}
+
 bool print_available_interfaces(){
         struct ifaddrs *ifaddresses, *ifaddress;
         if(getifaddrs(&ifaddresses) == -1){
@@ -164,10 +188,32 @@ bool get_input_params(int argc, char *argv[], char** interface, int* wait, char*
 	return true;
 }
 
+
+
 bool port_parser(char* ports_string, int* ports_array){
         char* number = strtok(port_string, ",");
         while(number){
-        
+                if(isdigit(number[0])){
+                        if(strchr(number, '-')){
+                                int start, end;
+                                if(sscanf(token, "%d-%d", &start, &end) == 2 && start <= end && start > 0 && end <= MAX_PORTS){
+                                        for(int index = start; index <= end; index++){
+                                                ports_array[index] = 1;
+                                        }
+                                }else{
+                                        fprintf(stderr, "Error: Unexpected value detected in the port range.");
+                                }
+                        }else{
+                                int value = atoi(number);
+                                if(value > 0 && value <= MAX_PORTS){
+                                        ports_array[value] = 1;
+                                }else{
+                                        fprintf(stderr, "Error: The port you entered (%d) is out of the allowed range.", value);
+                                }
+                        }
+                }else{
+                        fprintf(stderr, "Error: Unexpected value was detected in the ports.");
+                }
         }
 }
 
@@ -177,8 +223,8 @@ int main(int argc, char *argv[]){
 	char* target = NULL;
 	char* tcp_ports_string = NULL;
 	char* udp_ports_string = NULL;
-	//int tcp_ports[MAX_PORTS] = {0};
-	//int udp_ports[MAX_PORTS] = {0};
+	int tcp_ports[MAX_PORTS] = {0};
+	int udp_ports[MAX_PORTS] = {0};
 	
 	if(!get_input_params(argc, argv, &interface, &timeout, &target, &udp_ports_string, &tcp_ports_string) && interface){
 		printf("%s %s %d \n", interface, target, timeout);
