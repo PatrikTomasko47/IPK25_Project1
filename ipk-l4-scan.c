@@ -68,33 +68,33 @@ uint16_t udp_checksum(void* source_ip, void* dest_ip, struct udphdr* udp_header,
         
         if(ipv6_mode){
                 struct pseudo_header_ipv4 p_header;
-                memcpy(p_header.source_ip, source_ip, 16);
-                memcpy(p_header.dest_ip, dest_ip, 16);
-                p_header.reserved = 0;
+                memcpy(&p_header.source_ip, source_ip, 16);
+                memcpy(&p_header.destination_ip, dest_ip, 16);
+                p_header.zero = 0;
                 p_header.protocol = IPPROTO_UDP;
-                p_header.udp_length = htons(udp_len);
+                p_header.udp_tcp_length = htons(udp_length);
                 
-                total_len = sizeof(struct pseudo_header_ipv6) + udp_len;
-                buffer = malloc(total_len);
+                final_length = sizeof(struct pseudo_header_ipv6) + udp_length;
+                buffer = malloc(final_length);
                 
                 memcpy(buffer, &p_header, sizeof(struct pseudo_header_ipv6));
-                memcpy(buffer + sizeof(struct pseudo_header_ipv6) / 2, udp_header, udp_len);
+                memcpy(buffer + sizeof(struct pseudo_header_ipv6) / 2, udp_header, udp_length);
         }else{
                 struct pseudo_header_ipv6 p_header;
-                p_header.source_ip = *(uint32_t *)source_ip;
-                p_header.dest_ip = *(uint32_t *)dest_ip;
-                p_header.reserved = 0;
+                memcpy(&p_header.source_ip, source_ip, 4);
+                memcpy(&p_header.destination_ip, dest_ip, 4);
+                p_header.zero = 0;
                 p_header.protocol = IPPROTO_UDP;
-                p_header.udp_length = htons(udp_len);
+                p_header.udp_tcp_length = htons(udp_length);
                 
-                total_len = sizeof(struct pseudo_header_ipv4) + udp_len;
-                buffer = malloc(total_len);
+                final_len = sizeof(struct pseudo_header_ipv4) + udp_length;
+                buffer = malloc(final_length);
                 
                 memcpy(buffer, &p_header, sizeof(struct pseudo_header_ipv4));
-                memcpy(buffer + sizeof(struct pseudo_header_ipv4) / 2, udp_header, udp_len);
+                memcpy(buffer + sizeof(struct pseudo_header_ipv4) / 2, udp_header, udp_length);
         }
         
-        uint16_t checksum_value = checksum(buffer, total_len);
+        uint16_t checksum_value = checksum(buffer, final_len);
         free(buffer);
         
         return checksum_value;
@@ -135,6 +135,7 @@ uint16_t tcp_checksum(void* source_ip, void* dest_ip, struct tcphdr* tcp_header,
         uint16_t checksum_value = checksum(buffer, total_len);
         free(buffer);
         
+        printf("Calculated %d \n",checksum_value);
         return checksum_value;
 }
 
@@ -178,9 +179,11 @@ int raw_socket_maker(int protocol){
         
 }
 
-void scan_tcp_ipv4(uint32_t target, int* ports_array) {
+void scan_tcp_ipv4(uint32_t target, int* ports_array, uint32_t source_ip) {
         for(int index = 0; index < MAX_PORTS; index++){
                 if(ports_array[index]){
+                        struct udphdr tcp_header;
+                        construct_tcp_header((void *) target, (uint16_t) index, &tcp_header, false, (void *) source_ip);
                         
                 }
         }
@@ -196,6 +199,45 @@ void scan_udp_ipv4(uint32_t target, int* ports_array) {
 
 void scan_udp_ipv6(struct in6_addr, int* ports_array) {
         printf("Inside scan_udp_ipv6 -> Target: %s\n", target);
+}
+
+true convert_source_ip(char* interface, void* return_pointer, bool ipv6_mode){
+        struct ifaddrs *ifaddresses, *ifaddress;
+        if(getifaddrs(&ifaddresses) == -1){
+                printf("An error occured fetching the interfaces while converting the interface to an IP.");
+                return false;
+        }
+        
+        for(ifaddress = ifaddresses; ifaddress != NULL; ifaddress = ifaddress->ifa_next){
+                if(strcmp(ifaddress->ifa_name, interface) == 0 && ifaddress->ifa_addr != NULL){
+                        if(ipv6_mode && ifaddress->ifa_addr->sa_family == AF_INET){
+                        
+                                struct sockaddr_in6 *ipv6_address = (struct sockaddr_in6 *)ifaddress->ifa_addr;
+                                
+                                if(IN6_IS_ADDR_LINKLOCAL(&ipv6_address->sin6_addr)){
+                                        continue;
+                                }
+                                
+                                memcpy(return_pointer, &ipv6_address->sin6_addr, sizeof(struct in6_addr));
+                                free(ifaddresses);
+                                return true;
+                                
+                        }else if(!ipv6_mode && ifaddress->ifa_addr->sa_family == AF_INET6){
+                                
+                                uint32_t *ipv4_address = (uint32_t *)ifaddress->ifa_addr;
+                                
+                                memcpy(return_pointer, &ipv4_address->sin_addr, sizeof(uint32_t));
+                                free(ifaddresses);
+                                return true;
+                                
+                        }else{
+                                fprintf(stderr, "Error: The interface you want to use '%s'",interface, ipv6_mode ? 6 : 4);
+                                return false;
+                        }
+                }
+        }
+        freeifaddrs(ifaddresses);
+        return false;
 }
 
 void iterate_domain_ips(char* domain, int* tcp_ports, int* udp_ports) {
@@ -218,15 +260,15 @@ void iterate_domain_ips(char* domain, int* tcp_ports, int* udp_ports) {
                         addr = &(ipv4->sin_addr);
                         inet_ntop(found->ai_family, addr, ip, sizeof(ip));
                         printf("IPv4: %s\n", ip);
-                        scan_tcp_ipv4(ip, tcp_ports);
-                        scan_udp_ipv4(ip, udp_ports);
+                        scan_tcp_ipv4(addr, tcp_ports);
+                        scan_udp_ipv4(addr, udp_ports);
                 } else if (found->ai_family == AF_INET6) {
                         struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)found->ai_addr;
                         addr = &(ipv6->sin6_addr);
                         inet_ntop(found->ai_family, addr, ip, sizeof(ip));
                         printf("IPv6: %s\n", ip);
-                        scan_tcp_ipv6(ip, tcp_ports);
-                        scan_udp_ipv6(ip, udp_ports);
+                        scan_tcp_ipv6(addr, tcp_ports);
+                        scan_udp_ipv6(addr, udp_ports);
                 }
         }
 
@@ -453,20 +495,33 @@ int main(int argc, char *argv[]){
 	        iterate_domain_ips(target, tcp_ports, udp_ports);
 	}else if(ttype == TYPE_IPV4){
 	        uint32_t converted_ipv4;
+	        convert_source_ip(interface, (void *) &converted_ipv4, false);
 	        
 	        if(inet_pton(AF_INET, target, &converted_ipv4) != 1)
 	                fprintf(stderr, "Error: An error occured converting the target IP address to uint32_t.");
 	        
-	        scan_tcp_ipv4(converted_ipv4, tcp_ports);
-                scan_udp_ipv4(converted_ipv4, udp_ports);
+	        uint32_t source_ip;
+	        if(!convert_source_ip(interface, (void *) &source_ip, false)){
+	                fprintf(stderr, "Error: An error occured converting the interface string to the IP address.")
+	                return 1;
+	        }
+	        
+	        scan_tcp_ipv4(converted_ipv4, tcp_ports, source_ip);
+                scan_udp_ipv4(converted_ipv4, udp_ports, source_ip);
 	}else{
 	        struct ip6_addr converted_ipv6;
 	        
 	        if(inet_pton(AF_INET6, target, &converted_ipv4) != 1)
-	                fprintf(stderr, "Error: An error occured converting the target IP address to uint32_t.");
-	                
-	        scan_tcp_ipv6(converted_ipv6, tcp_ports);
-                scan_udp_ipv6(converted_ipv6, udp_ports);
+	                fprintf(stderr, "Error: An error occured converting the target IP address to ip6_addr struct.");
+	        
+	        struct ip6_addr source_ip;
+	        if(!convert_source_ip(interface, (void *) &source_ip, true)){
+	                fprintf(stderr, "Error: An error occured converting the interface string to the IP address.")
+	                return 1;
+	        }
+	        
+	        scan_tcp_ipv6(converted_ipv6, tcp_ports, source_ip);
+                scan_udp_ipv6(converted_ipv6, udp_ports, source_ip);
 	}
 	return 0;
 }
