@@ -13,9 +13,10 @@
 #include <sys/socket.h>
 #include <netinet/udp.h>
 #include <netinet/tcp.h>
+#include <unistd.h>
 
 #define DEFAULT_TIMEOUT 5000 //the default timeout if the user doesn't specify otherwise
-#define DOMAIN_REGEX "^([a-zA-Z0-9][-a-zA-Z0-9]*\\.)+[a-zA-Z]{2,}$" //regex used to verify wether user entered a valid domain name
+#define DOMAIN_REGEX "^(([a-zA-Z0-9]+(-[a-zA-Z0-9]+)*\\.)+[a-zA-Z]{2,})$" //regex used to verify wether user entered a valid domain name
 #define MAX_PORTS 65535 //maximum ammount of possible ports to scan through
 #define SOURCE_PORT 50000 //source port, it is in the ephemeral port range, and i just decided for it because it was nice
 
@@ -49,7 +50,7 @@ uint16_t sum_calculator(void *data, int length){
         
         while(length > 1){
                 sum += *pointer++;
-                length=-2;
+                length-=2;
         }
         
         if (length == 1){
@@ -170,23 +171,55 @@ void construct_udp_header(void* target_ip, uint16_t destination_port, struct udp
         return ;
 }
 
-int raw_socket_maker(int protocol){
-        int socket_var = socket(AF_INET, SOCK_RAW, protocol);
+bool raw_socket_maker(int protocol, int* socket_var){
+        *socket_var = socket(AF_INET, SOCK_RAW, protocol);
         if(socket_var < 0){
                 fprintf(stderr, "Error: The creation of a raw socket failed.");
-                return -1;
+                return false;
         }
-        return socket_var;
+        return true;
 }
 
 void scan_tcp_ipv4(uint32_t target, int* ports_array, uint32_t source_ip) {
+        int raw_socket;
+        if(!raw_socket_maker(IPPROTO_TCP, &raw_socket)){
+                fprintf(stderr, "Error: An error occured opening the raw socket.");
+        }
+        
+        struct sockaddr_in target_wrapper;
+        memset(&target_wrapper, 0, sizeof(target_wrapper));
+        target_wrapper.sin_family = AF_INET;
+        target_wrapper.sin_addr.s_addr = target;
+        
+        struct sockaddr_in src_wrapper;
+        src_wrapper.sin_family = AF_INET;
+        src_wrapper.sin_addr.s_addr = source_ip;
+        bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper));
+        
+        if (bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) {
+                perror("Binding source IP failed");
+                close(raw_socket);
+                return;
+        }
+        
         for(int index = 0; index < MAX_PORTS; index++){
                 if(ports_array[index]){
                         struct tcphdr tcp_header;
                         construct_tcp_header(&target, (uint16_t) index, &tcp_header, false, &source_ip);
                         
+                        target_wrapper.sin_port = htons(index);
+                        
+                        ssize_t bytes_sent = sendto(raw_socket, &tcp_header, sizeof(tcp_header), 0, (struct sockaddr *)&target_wrapper, sizeof(target_wrapper));
+
+                        if (bytes_sent == -1) {
+                            fprintf(stderr, "Error: Failed to send the packet.");
+                        } else {
+                            printf("[+] Sent TCP SYN to %s:%d\n", inet_ntoa(target_wrapper.sin_addr), index);
+                        }
                 }
         }
+        close(raw_socket);
+        return;
 }
 
 void scan_tcp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr source_ip) {
@@ -210,7 +243,7 @@ bool convert_source_ip(char* interface, void* return_pointer, bool ipv6_mode){
         
         for(ifaddress = ifaddresses; ifaddress != NULL; ifaddress = ifaddress->ifa_next){
                 if(strcmp(ifaddress->ifa_name, interface) == 0 && ifaddress->ifa_addr != NULL){
-                        if(ipv6_mode && ifaddress->ifa_addr->sa_family == AF_INET){
+                        if(ipv6_mode && ifaddress->ifa_addr->sa_family == AF_INET6){
                         
                                 struct sockaddr_in6 *ipv6_address = (struct sockaddr_in6 *)ifaddress->ifa_addr;
                                 
@@ -222,7 +255,7 @@ bool convert_source_ip(char* interface, void* return_pointer, bool ipv6_mode){
                                 free(ifaddresses);
                                 return true;
                                 
-                        }else if(!ipv6_mode && ifaddress->ifa_addr->sa_family == AF_INET6){
+                        }else if(!ipv6_mode && ifaddress->ifa_addr->sa_family == AF_INET){
                                 
                                 struct sockaddr_in *ipv4_address = (struct sockaddr_in *)ifaddress->ifa_addr;
                                 
@@ -230,12 +263,10 @@ bool convert_source_ip(char* interface, void* return_pointer, bool ipv6_mode){
                                 free(ifaddresses);
                                 return true;
                                 
-                        }else{
-                                fprintf(stderr, "Error: The interface you want to use '%s' does not have a ipv%d address.",interface, ipv6_mode ? 6 : 4);
-                                return false;
                         }
                 }
         }
+        fprintf(stderr, "Error: The interface you want to use '%s' does not have a ipv%d address.",interface, ipv6_mode ? 6 : 4);
         freeifaddrs(ifaddresses);
         return false;
 }
@@ -465,6 +496,7 @@ bool port_parser(char* ports_string, int* ports_array){
         char* number = strtok(ports_string, ",");
         while(number){
                 if(isdigit(number[0])){
+                        
                         if(strchr(number, '-')){
                                 int start, end;
                                 if(sscanf(number, "%d-%d", &start, &end) == 2 && start <= end && start > 0 && end <= MAX_PORTS){
@@ -485,6 +517,7 @@ bool port_parser(char* ports_string, int* ports_array){
                 }else{
                         fprintf(stderr, "Error: Unexpected value was detected in the ports.");
                 }
+                number = strtok(NULL, ",");
         }
         return true;
 }
@@ -501,6 +534,15 @@ int main(int argc, char *argv[]){
 	if(!get_input_params(argc, argv, &interface, &timeout, &target, &udp_ports_string, &tcp_ports_string) && interface){
 		return 1;
 	}
+	
+	if(){
+	
+	}
+	
+	if(){
+	
+	}
+	
 	target_type ttype = determine_target_type(target);
 	
 	if(ttype == TYPE_UNKNOWN){
