@@ -43,6 +43,14 @@ struct pseudo_header_ipv6{
         uint16_t udp_tcp_length;
 };
 
+struct send_parameters{
+        int* ports;
+        uint32_t target_ipv4;
+        uint32_t source_ipv4;
+        struct in6_addr target_ipv6;
+        struct in6_addr source_ipv6;
+};
+
 uint16_t sum_calculator(void *data, int length){
         uint32_t sum = 0;
         uint16_t odd_byte = 0;
@@ -492,7 +500,7 @@ bool get_input_params(int argc, char *argv[], char** interface, int* wait, char*
 
 
 
-bool port_parser(char* ports_string, int* ports_array){
+bool port_parser(char* ports_string, int* ports_array, bool* filled){
         char* number = strtok(ports_string, ",");
         while(number){
                 if(isdigit(number[0])){
@@ -502,6 +510,7 @@ bool port_parser(char* ports_string, int* ports_array){
                                 if(sscanf(number, "%d-%d", &start, &end) == 2 && start <= end && start > 0 && end <= MAX_PORTS){
                                         for(int index = start; index <= end; index++){
                                                 ports_array[index] = 1;
+                                                *filled = true;
                                         }
                                 }else{
                                         fprintf(stderr, "Error: Unexpected value detected in the port range. Know that in ranges, the number to the left has to be smaller or equal to the number to the right.");
@@ -510,6 +519,7 @@ bool port_parser(char* ports_string, int* ports_array){
                                 int value = atoi(number);
                                 if(value > 0 && value <= MAX_PORTS){
                                         ports_array[value] = 1;
+                                        *filled = true;
                                 }else{
                                         fprintf(stderr, "Error: The port you entered (%d) is out of the allowed range.", value);
                                 }
@@ -523,6 +533,9 @@ bool port_parser(char* ports_string, int* ports_array){
 }
 
 int main(int argc, char *argv[]){
+        bool udp = false;
+        bool tcp = false;
+
         int timeout = DEFAULT_TIMEOUT;
 	char* interface = NULL;
 	char* target = NULL;
@@ -535,16 +548,17 @@ int main(int argc, char *argv[]){
 		return 1;
 	}
 	
-	if(){
-	
-	}
-	
-	if(){
+	if(!port_parser(tcp_ports_string, tcp_ports, &tcp))
+	        return 1;
+
+	if(!port_parser(udp_ports_string, udp_ports, &udp)){
 	
 	}
 	
 	target_type ttype = determine_target_type(target);
 	
+        printf("The target is %d", ttype);
+
 	if(ttype == TYPE_UNKNOWN){
 	        fprintf(stderr, "Error: The specified target is not correct.");
 	        return 1;
@@ -570,12 +584,11 @@ int main(int argc, char *argv[]){
 	        
 	        uint32_t source_ipv4;
 	        if(!convert_source_ip(interface, (void *) &source_ipv4, false)){
-	                fprintf(stderr, "Error: The selected interface does not support ipv4 communication..");
 	                return 1;
 	        }
 	        
 	        scan_tcp_ipv4(converted_ipv4, tcp_ports, source_ipv4);
-                scan_udp_ipv4(converted_ipv4, udp_ports, source_ipv4);
+                //scan_udp_ipv4(converted_ipv4, udp_ports, source_ipv4);
 	}else{
 	        struct in6_addr converted_ipv6;
 	        
