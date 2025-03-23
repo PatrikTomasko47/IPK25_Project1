@@ -13,7 +13,10 @@
 #include <sys/socket.h>
 #include <netinet/udp.h>
 #include <netinet/tcp.h>
+#include <netinet/ip.h>
+#include <netinet/ip_icmp.h>
 #include <unistd.h>
+#include <sys/select.h>
 
 #define DEFAULT_TIMEOUT 5000 //the default timeout if the user doesn't specify otherwise
 #define DOMAIN_REGEX "^(([a-zA-Z0-9]+(-[a-zA-Z0-9]+)*\\.)+[a-zA-Z]{2,})$" //regex used to verify wether user entered a valid domain name
@@ -144,7 +147,7 @@ uint16_t tcp_checksum(void* source_ip, void* dest_ip, struct tcphdr* tcp_header,
         uint16_t checksum_value = sum_calculator(buffer, final_length);
         free(buffer);
         
-        printf("Calculated %d \n",checksum_value);
+        //printf("Calculated %d \n",checksum_value);
         return checksum_value;
 }
 
@@ -188,12 +191,37 @@ bool raw_socket_maker(int protocol, int* socket_var){
         return true;
 }
 
-void scan_tcp_ipv4(uint32_t target, int* ports_array, uint32_t source_ip) {
+int analyze_tcp_response(char* buffer){
+        struct iphdr *ip_header = (struct iphdr*) buffer;
+        struct tcphdr *tcp_header = (struct tcphdr*)(buffer + (ip_header->ihl * 4));
+
+        if(tcp_header->rst){
+                return 1;
+        }else if(tcp_header->syn && tcp_header->ack){
+                return -1;
+        }
+
+        return 0;
+}
+
+int analyze_udp_response(char* buffer){
+        struct iphdr *ip_header = (struct iphdr*) buffer;
+        struct icmphdr *icmp_header = (struct icmphdr*)(buffer + (ip_header->ihl * 4));
+
+        if(icmp_header->type == 3 && icmp_header->code == 3){
+                return 1;
+        }else{
+                return -1;
+        }
+}
+
+void scan_tcp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int timeout) {
         int raw_socket;
         if(!raw_socket_maker(IPPROTO_TCP, &raw_socket)){
                 fprintf(stderr, "Error: An error occured opening the raw socket.");
+                return;
         }
-        
+
         struct sockaddr_in target_wrapper;
         memset(&target_wrapper, 0, sizeof(target_wrapper));
         target_wrapper.sin_family = AF_INET;
@@ -202,8 +230,7 @@ void scan_tcp_ipv4(uint32_t target, int* ports_array, uint32_t source_ip) {
         struct sockaddr_in src_wrapper;
         src_wrapper.sin_family = AF_INET;
         src_wrapper.sin_addr.s_addr = source_ip;
-        bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper));
-        
+
         if (bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) {
                 perror("Binding source IP failed");
                 close(raw_socket);
@@ -213,16 +240,57 @@ void scan_tcp_ipv4(uint32_t target, int* ports_array, uint32_t source_ip) {
         for(int index = 0; index < MAX_PORTS; index++){
                 if(ports_array[index]){
                         struct tcphdr tcp_header;
-                        construct_tcp_header(&target, (uint16_t) index, &tcp_header, false, &source_ip);
-                        
-                        target_wrapper.sin_port = htons(index);
-                        
-                        ssize_t bytes_sent = sendto(raw_socket, &tcp_header, sizeof(tcp_header), 0, (struct sockaddr *)&target_wrapper, sizeof(target_wrapper));
+                        int verify_filtered = 0;
 
-                        if (bytes_sent == -1) {
-                            fprintf(stderr, "Error: Failed to send the packet.");
-                        } else {
-                            printf("[+] Sent TCP SYN to %s:%d\n", inet_ntoa(target_wrapper.sin_addr), index);
+                        while(verify_filtered < 2){
+                                construct_tcp_header(&target, (uint16_t) index, &tcp_header, false, &source_ip);
+                                
+                                ssize_t bytes_sent = sendto(raw_socket, &tcp_header, sizeof(tcp_header), 0, (struct sockaddr *)&target_wrapper, sizeof(target_wrapper));
+
+                                if (bytes_sent == -1) {
+                                fprintf(stderr, "Error: Failed to send the packet.");
+                                }
+
+                                fd_set read_content;
+                                FD_ZERO(&read_content);
+                                FD_SET(raw_socket, &read_content);
+
+                                struct timeval timeout_struct;
+                                timeout_struct.tv_usec = 0;
+                                timeout_struct.tv_sec = timeout/1000;
+
+                                int waiter = select(raw_socket + 1, &read_content, NULL, NULL, &timeout_struct);
+
+                                if(waiter < 0){
+                                        printf("Error: Select() failed.");
+                                        break;
+                                }
+
+                                if(waiter == 0){
+
+                                        verify_filtered++;
+
+                                        if(verify_filtered == 2){
+                                                printf("%s %d tcp filtered\n", inet_ntoa(target_wrapper.sin_addr), index);
+                                        }
+
+                                }else{
+                                        struct sockaddr_in sender;
+                                        socklen_t sender_length = sizeof(sender);
+                                        char buffer[1024];
+
+                                        ssize_t recieved = recvfrom(raw_socket, buffer, sizeof(buffer), 0, (struct sockaddr *)&sender, &sender_length);
+
+                                        if(recieved > 0){
+                                                int state = analyze_tcp_response(buffer);
+                                                if(state == 1){
+                                                        printf("%s %d tcp open\n", inet_ntoa(target_wrapper.sin_addr), index);
+                                                }else if (state == -1){
+                                                        printf("%s %d tcp closed\n", inet_ntoa(target_wrapper.sin_addr), index);
+                                                }
+                                        }
+                                        break;
+                                }
                         }
                 }
         }
@@ -231,14 +299,160 @@ void scan_tcp_ipv4(uint32_t target, int* ports_array, uint32_t source_ip) {
 }
 
 void scan_tcp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr source_ip) {
+        int raw_socket;
+        if(!raw_socket_maker(IPPROTO_TCP, &raw_socket)){
+                fprintf(stderr, "Error: An error occured opening the raw socket.");
+                return;
+        }
+
+        struct sockaddr_in6 target_wrapper;
+        memset(&target_wrapper, 0, sizeof(target_wrapper));
+        target_wrapper.sin6_family = AF_INET6;
+        memcpy(&target_wrapper.sin6_addr, &target, sizeof(struct in6_addr));
+        
+        struct sockaddr_in6 src_wrapper;
+        src_wrapper.sin6_family = AF_INET6;
+        memcpy(&target_wrapper.sin6_addr, &source_ip, sizeof(struct in6_addr));
+
+        if (bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) {
+                perror("Binding source IP failed");
+                close(raw_socket);
+                return;
+        }
+        
+        for(int index = 0; index < MAX_PORTS; index++){
+                if(ports_array[index]){
+                        struct tcphdr tcp_header;
+                        construct_tcp_header(&target, (uint16_t) index, &tcp_header, true, &source_ip);
+                        
+                        ssize_t bytes_sent = sendto(raw_socket, &tcp_header, sizeof(tcp_header), 0, (struct sockaddr *)&target_wrapper, sizeof(target_wrapper));
+
+                        if (bytes_sent == -1) {
+                                fprintf(stderr, "Error: Failed to send the packet.");
+                        } else {
+                                char target_ip_str[INET6_ADDRSTRLEN];
+                                inet_ntop(AF_INET6, &target_wrapper.sin6_addr, target_ip_str, sizeof(target_ip_str));
+                                printf("[+] Sent TCP SYN to %s:%d\n", target_ip_str, index);
+                        }
+                }
+        }
+        close(raw_socket);
         return;
 }
 
-void scan_udp_ipv4(uint32_t target, int* ports_array, uint32_t source_ip) {
+void scan_udp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int timeout) {
+        int raw_socket;
+        if(!raw_socket_maker(IPPROTO_UDP, &raw_socket)){
+                fprintf(stderr, "Error: An error occured opening the raw socket.");
+                return;
+        }
+
+        struct sockaddr_in target_wrapper;
+        memset(&target_wrapper, 0, sizeof(target_wrapper));
+        target_wrapper.sin_family = AF_INET;
+        target_wrapper.sin_addr.s_addr = target;
+        
+        struct sockaddr_in src_wrapper;
+        src_wrapper.sin_family = AF_INET;
+        src_wrapper.sin_addr.s_addr = source_ip;
+
+        if (bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) {
+                perror("Binding source IP failed");
+                close(raw_socket);
+                return;
+        }
+        
+        for(int index = 0; index < MAX_PORTS; index++){
+                if(ports_array[index]){
+                        if(ports_array[index]){
+                                struct udphdr udp_header;
+        
+                                construct_udp_header(&target, (uint16_t) index, &udp_header, false, &source_ip);
+                                        
+                                ssize_t bytes_sent = sendto(raw_socket, &udp_header, sizeof(udp_header), 0, (struct sockaddr *)&target_wrapper, sizeof(target_wrapper));
+        
+                                if (bytes_sent == -1) {
+                                fprintf(stderr, "Error: Failed to send the packet.");
+                                }
+        
+                                fd_set read_content;
+                                FD_ZERO(&read_content);
+                                FD_SET(raw_socket, &read_content);
+        
+                                struct timeval timeout_struct;
+                                timeout_struct.tv_usec = 0;
+                                timeout_struct.tv_sec = timeout/1000;
+        
+                                int waiter = select(raw_socket + 1, &read_content, NULL, NULL, &timeout_struct);
+        
+                                if(waiter < 0){
+                                        printf("Error: Select() failed.");
+                                        break;
+                                }else if (waiter > 0){
+                                        
+                                        struct sockaddr_in sender;
+                                        socklen_t sender_length = sizeof(sender);
+                                        char buffer[1024];
+        
+                                        ssize_t recieved = recvfrom(raw_socket, buffer, sizeof(buffer), 0, (struct sockaddr *)&sender, &sender_length);
+        
+                                        if(recieved > 0){
+
+                                                int state = analyze_tcp_response(buffer);
+                                                if(state == 1){
+                                                        printf("%s %d udp open\n", inet_ntoa(target_wrapper.sin_addr), index);
+                                                }else if (state == -1){
+                                                        printf("%s %d udp closed\n", inet_ntoa(target_wrapper.sin_addr), index);
+                                                }
+                                        }
+                                        break;
+                                }
+                        }
+                }
+        }
+        close(raw_socket);
         return;
 }
 
-void scan_udp_ipv6(struct in6_addr, int* ports_array, struct in6_addr source_ip) {
+void scan_udp_ipv6(struct in6_addr source_ip, int* ports_array, struct in6_addr target) {
+        int raw_socket;
+        if(!raw_socket_maker(IPPROTO_UDP, &raw_socket)){
+                fprintf(stderr, "Error: An error occured opening the raw socket.");
+                return;
+        }
+
+        struct sockaddr_in6 target_wrapper;
+        memset(&target_wrapper, 0, sizeof(target_wrapper));
+        target_wrapper.sin6_family = AF_INET6;
+        memcpy(&target_wrapper.sin6_addr, &target, sizeof(struct in6_addr));
+        
+        struct sockaddr_in6 src_wrapper;
+        src_wrapper.sin6_family = AF_INET6;
+        memcpy(&target_wrapper.sin6_addr, &source_ip, sizeof(struct in6_addr));
+
+        if (bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) {
+                perror("Binding source IP failed");
+                close(raw_socket);
+                return;
+        }
+        
+        for(int index = 0; index < MAX_PORTS; index++){
+                if(ports_array[index]){
+                        struct udphdr udp_header;
+                        construct_udp_header(&target, (uint16_t) index, &udp_header, true, &source_ip);
+                        
+                        ssize_t bytes_sent = sendto(raw_socket, &udp_header, sizeof(udp_header), 0, (struct sockaddr *)&target_wrapper, sizeof(target_wrapper));
+
+                        if (bytes_sent == -1) {
+                            fprintf(stderr, "Error: Failed to send the packet.");
+                        } else {
+                                char target_ip_str[INET6_ADDRSTRLEN];
+                                inet_ntop(AF_INET6, &target_wrapper.sin6_addr, target_ip_str, sizeof(target_ip_str));
+                                printf("[+] Sent TCP SYN to %s:%d\n", target_ip_str, index);
+                        }
+                }
+        }
+        close(raw_socket);
         return;
 }
 
@@ -306,8 +520,8 @@ void iterate_domain_ips(char* domain, int* tcp_ports, int* udp_ports, uint32_t s
                         addr = &(ipv4->sin_addr);
                         inet_ntop(found->ai_family, addr, ip, sizeof(ip));
                         printf("IPv4: %s\n", ip);
-                        scan_tcp_ipv4((uint32_t)ipv4->sin_addr.s_addr, tcp_ports, source_ipv4);
-                        scan_udp_ipv4((uint32_t)ipv4->sin_addr.s_addr, udp_ports, source_ipv4);
+                        scan_tcp_ipv4((uint32_t)ipv4->sin_addr.s_addr, tcp_ports, source_ipv4, DEFAULT_TIMEOUT);
+                        scan_udp_ipv4((uint32_t)ipv4->sin_addr.s_addr, udp_ports, source_ipv4, DEFAULT_TIMEOUT);
                         
                 } else if (found->ai_family == AF_INET6) {
                 
@@ -548,16 +762,17 @@ int main(int argc, char *argv[]){
 		return 1;
 	}
 	
-	if(!port_parser(tcp_ports_string, tcp_ports, &tcp))
-	        return 1;
+        if(tcp_ports_string){
+                if(!port_parser(tcp_ports_string, tcp_ports, &tcp))
+                        return 1;
+        }
 
-	if(!port_parser(udp_ports_string, udp_ports, &udp)){
-	
-	}
+        if(udp_ports_string){
+                if(!port_parser(udp_ports_string, udp_ports, &udp))
+                        return 1;
+        }
 	
 	target_type ttype = determine_target_type(target);
-	
-        printf("The target is %d", ttype);
 
 	if(ttype == TYPE_UNKNOWN){
 	        fprintf(stderr, "Error: The specified target is not correct.");
@@ -576,19 +791,21 @@ int main(int argc, char *argv[]){
 	
 	        iterate_domain_ips(target, tcp_ports, udp_ports, source_ipv4, source_ipv6);
 	}else if(ttype == TYPE_IPV4){
-	        uint32_t converted_ipv4;
-	        convert_source_ip(interface, (void *) &converted_ipv4, false);
 	        
-	        if(inet_pton(AF_INET, target, &converted_ipv4) != 1)
-	                fprintf(stderr, "Error: An error occured converting the target IP address to uint32_t.");
-	        
+                struct in_addr target_ipv4;
 	        uint32_t source_ipv4;
-	        if(!convert_source_ip(interface, (void *) &source_ipv4, false)){
+	        
+                if(!convert_source_ip(interface, (void *) &source_ipv4, false)){
 	                return 1;
 	        }
+
+                if(inet_pton(AF_INET, target, &target_ipv4) != 1){
+                        fprintf(stderr, "Error: The conversion of the target IP from string to uint_32 failed.");
+                        return 1;
+                }
 	        
-	        scan_tcp_ipv4(converted_ipv4, tcp_ports, source_ipv4);
-                //scan_udp_ipv4(converted_ipv4, udp_ports, source_ipv4);
+	        scan_tcp_ipv4(source_ipv4, tcp_ports, target_ipv4.s_addr, DEFAULT_TIMEOUT);
+                scan_udp_ipv4(source_ipv4, udp_ports, target_ipv4.s_addr, DEFAULT_TIMEOUT);
 	}else{
 	        struct in6_addr converted_ipv6;
 	        
