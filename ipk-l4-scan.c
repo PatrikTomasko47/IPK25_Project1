@@ -16,6 +16,7 @@
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/ip_icmp.h>
+#include <netinet/icmp6.h>
 #include <unistd.h>
 #include <sys/select.h>
 
@@ -183,8 +184,14 @@ void construct_udp_header(void* target_ip, uint16_t destination_port, struct udp
         return ;
 }
 
-bool raw_socket_maker(int protocol, int* socket_var){
-        *socket_var = socket(AF_INET, SOCK_RAW, protocol);
+bool raw_socket_maker(int protocol, int* socket_var, bool ipv6_mode){
+        int inet_type = AF_INET;
+
+        if(ipv6_mode == true) 
+                inet_type = AF_INET6;
+        
+
+        *socket_var = socket(inet_type, SOCK_RAW, protocol);
         if(socket_var < 0){
                 fprintf(stderr, "Error: The creation of a raw socket failed.");
                 return false;
@@ -192,41 +199,53 @@ bool raw_socket_maker(int protocol, int* socket_var){
         return true;
 }
 
-int analyze_ips(char* buffer, uint32_t expected_target_ip, uint32_t expected_source_ip){
-        struct iphdr *ip_header = (struct iphdr*) buffer;
+int analyze_ips6(struct in6_addr real_source_ip, struct in6_addr expected_source_ip){
 
-        uint32_t real_source_ip = ip_header->saddr;
-        uint32_t real_dest_ip = ip_header->daddr;
+        char real_source_ip_str[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET6, &real_source_ip, real_source_ip_str, INET6_ADDRSTRLEN);
 
-        char real_source_ip_str[INET_ADDRSTRLEN];
-        char real_dest_ip_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &real_source_ip, real_source_ip_str, INET_ADDRSTRLEN);
-        inet_ntop(AF_INET, &real_dest_ip, real_dest_ip_str, INET_ADDRSTRLEN);
-
-        char expected_source_ip_str[INET_ADDRSTRLEN];
-        char expected_target_ip_str[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &expected_source_ip, expected_source_ip_str, INET_ADDRSTRLEN);
-        inet_ntop(AF_INET, &expected_target_ip, expected_target_ip_str, INET_ADDRSTRLEN);
+        char expected_source_ip_str[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET6, &expected_source_ip, expected_source_ip_str, INET6_ADDRSTRLEN);
 
         printf("Comparing IPs:\n");
         printf("Real Source IP: %s vs Expected Source IP: %s\n", real_source_ip_str, expected_source_ip_str);
-        printf("Real Destination IP: %s vs Expected Destination IP: %s\n", real_dest_ip_str, expected_target_ip_str);
 
-        if (real_source_ip == expected_source_ip && real_dest_ip == expected_target_ip) {
+        if (memcmp(&real_source_ip, &expected_source_ip, sizeof(struct in6_addr)) == 0) {
                 return 0;
         }
 
         return 1;
 }
 
-int analyze_tcp_response(char* buffer, bool ipv6_mode){
+int analyze_ips(char* buffer, uint32_t expected_source_ip){
+        struct iphdr *ip_header = (struct iphdr*) buffer;
+
+        uint32_t real_source_ip = ip_header->saddr;
+
+        char real_source_ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &real_source_ip, real_source_ip_str, INET_ADDRSTRLEN);
+
+        char expected_source_ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &expected_source_ip, expected_source_ip_str, INET_ADDRSTRLEN);
+
+        printf("Comparing IPs:\n");
+        printf("Real Source IP: %s vs Expected Source IP: %s\n", real_source_ip_str, expected_source_ip_str);
+
+        if (real_source_ip == expected_source_ip) {
+                return 0;
+        }
+
+        return 1;
+}
+
+int analyze_tcp_response(char* buffer, bool ipv6_mode, uint32_t seq_number){
         struct tcphdr *tcp_header;
 
         if(ipv6_mode == false){
                 struct iphdr *ip_header = (struct iphdr*) buffer;
                 tcp_header = (struct tcphdr*)(buffer + (ip_header->ihl * 4));  
         }else{
-                tcp_header = (struct tcphdr*)(buffer + sizeof(struct ip6_hdr));
+                tcp_header = (struct tcphdr*) buffer;
         }
 
         printf("TCP Header:\n");
@@ -245,7 +264,9 @@ int analyze_tcp_response(char* buffer, bool ipv6_mode){
         printf("\tChecksum: 0x%04x\n", ntohs(tcp_header->th_sum));
         printf("\tUrgent Pointer: %u\n", ntohs(tcp_header->th_urp));
 
-        if(tcp_header->rst){
+        if(ntohl(tcp_header->th_ack) != ntohl(seq_number) + 1){
+                return 2;
+        }else if(tcp_header->rst){
                 return 1;
         }else if(tcp_header->syn && tcp_header->ack){
                 return -1;
@@ -254,25 +275,43 @@ int analyze_tcp_response(char* buffer, bool ipv6_mode){
         return 0;
 }
 
-int analyze_udp_response(char* buffer){
-        struct iphdr *ip_header = (struct iphdr*) buffer;
-        struct icmphdr *icmp_header = (struct icmphdr*)(buffer + (ip_header->ihl * 4));
+int analyze_udp_response(char* buffer, bool ipv6_mode){
 
-        printf("ICMP Header:\n");
-        printf("\tType: %u\n", icmp_header->type);
-        printf("\tCode: %u\n", icmp_header->code);
-        printf("\tChecksum: 0x%04x\n", ntohs(icmp_header->checksum));
+        if(!ipv6_mode){
 
-        if(icmp_header->type == 3 && icmp_header->code == 3){
-                return 1;
+                struct iphdr *ip_header = (struct iphdr*) buffer;
+                struct icmphdr *icmp_header = (struct icmphdr*)(buffer + (ip_header->ihl * 4));
+
+                printf("ICMP Header:\n");
+                printf("\tType: %u\n", icmp_header->type);
+                printf("\tCode: %u\n", icmp_header->code);
+                printf("\tChecksum: 0x%04x\n", ntohs(icmp_header->checksum));
+
+                if(icmp_header->type == 3 && icmp_header->code == 3){
+                        return 1;
+                }
+        
         }else{
-                return -1;
+        
+                struct icmp6_hdr *icmp6_header = (struct icmp6_hdr*)buffer;
+                
+                printf("ICMPv6 Header:\n");
+                printf("\tType: %u\n", icmp6_header->icmp6_type);
+                printf("\tCode: %u\n", icmp6_header->icmp6_code);
+                printf("\tChecksum: 0x%04x\n", ntohs(icmp6_header->icmp6_cksum));
+                
+                if(icmp6_header->icmp6_type == 1 && icmp6_header->icmp6_code == 4){
+                        return 1;
+                }
+                
         }
+        
+        return -1;
 }
 
 void scan_tcp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int timeout) {
         int raw_socket;
-        if(!raw_socket_maker(IPPROTO_TCP, &raw_socket)){
+        if(!raw_socket_maker(IPPROTO_TCP, &raw_socket, false)){
                 fprintf(stderr, "Error: An error occured opening the raw socket.");
                 return;
         }
@@ -303,7 +342,9 @@ void scan_tcp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
                                 ssize_t bytes_sent = sendto(raw_socket, &tcp_header, sizeof(tcp_header), 0, (struct sockaddr *)&target_wrapper, sizeof(target_wrapper));
 
                                 if (bytes_sent == -1) {
-                                fprintf(stderr, "Error: Failed to send the packet.");
+                                        fprintf(stderr, "Error: Failed to send the packet. Didn't you try to analyze ports outside localhost via lo?  ");
+                                        close(raw_socket);
+                                        return;
                                 }
 
 
@@ -345,7 +386,7 @@ void scan_tcp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
 
                                                 ssize_t recieved = recvfrom(raw_socket, buffer, sizeof(buffer), 0, (struct sockaddr *)&sender, &sender_length);
 
-                                                matching_ips = analyze_ips(buffer, source_ip, target);
+                                                matching_ips = analyze_ips(buffer, target);
 
                                                 if(matching_ips == 1){
                                                         continue;
@@ -354,11 +395,14 @@ void scan_tcp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
                                                 verify_filtered = 2;
 
                                                 if(recieved > 0){
-                                                        int state = analyze_tcp_response(buffer,false);
+                                                        int state = analyze_tcp_response(buffer,false, tcp_header.th_seq);
                                                         if(state == -1){
                                                                 printf("%s %d tcp open\n", inet_ntoa(target_wrapper.sin_addr), index);
                                                         }else if (state == 1){
                                                                 printf("%s %d tcp closed\n", inet_ntoa(target_wrapper.sin_addr), index);
+                                                        }else if (state == 2){
+                                                                matching_ips = 1;
+                                                                continue;
                                                         }
                                                 }
                                                 break;
@@ -373,7 +417,7 @@ void scan_tcp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
 
 void scan_tcp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr source_ip, int timeout) {
         int raw_socket;
-        if(!raw_socket_maker(IPPROTO_TCP, &raw_socket)){
+        if(!raw_socket_maker(IPPROTO_TCP, &raw_socket, true)){
                 fprintf(stderr, "Error: An error occured opening the raw socket.");
                 return;
         }
@@ -420,9 +464,9 @@ void scan_tcp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr sou
                                 timeout_struct.tv_usec = 0;
                                 timeout_struct.tv_sec = timeout/1000;
 
-                                //int matching_ips = 1;
+                                int matching_ips = 1;
 
-                                //while(matching_ips == 1){
+                                while(matching_ips == 1){
 
                                         int waiter = select(raw_socket + 1, &read_content, NULL, NULL, &timeout_struct);
 
@@ -434,7 +478,7 @@ void scan_tcp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr sou
 
                                         if(waiter == 0){
 
-                                                //matching_ips = 0;
+                                                matching_ips = 0;
 
                                                 verify_filtered++;
 
@@ -443,31 +487,34 @@ void scan_tcp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr sou
                                                 }
 
                                         }else{
-                                                struct sockaddr_in sender;
+                                                struct sockaddr_in6 sender;
                                                 socklen_t sender_length = sizeof(sender);
                                                 char buffer[1024];
 
                                                 ssize_t recieved = recvfrom(raw_socket, buffer, sizeof(buffer), 0, (struct sockaddr *)&sender, &sender_length);
 
-                                                //matching_ips = analyze_ips_6(buffer, source_ip, target);
+                                                matching_ips = analyze_ips6(sender.sin6_addr, target);
 
-                                                //if(matching_ips == 1){
-                                                //       continue;
-                                                //}
+                                                if(matching_ips == 1){
+                                                       continue;
+                                                }
 
                                                 verify_filtered = 2;
 
                                                 if(recieved > 0){
-                                                        int state = analyze_tcp_response(buffer, true);
+                                                        int state = analyze_tcp_response(buffer, true, tcp_header.th_seq);
                                                         if(state == -1){
                                                                 printf("%s %d tcp open\n", target_ip_str, index);
                                                         }else if (state == 1){
                                                                 printf("%s %d tcp closed\n", target_ip_str, index);
+                                                        }else if(state == 2){
+                                                                matching_ips = 1;
+                                                                continue;
                                                         }
                                                 }
                                                 break;
                                         }
-                                //}
+                                }
                         }
                 }
         }
@@ -477,13 +524,13 @@ void scan_tcp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr sou
 
 void scan_udp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int timeout) {
         int raw_socket_send;
-        if(!raw_socket_maker(IPPROTO_UDP, &raw_socket_send)){
+        if(!raw_socket_maker(IPPROTO_UDP, &raw_socket_send, false)){
                 fprintf(stderr, "Error: An error occured opening the raw socket.");
                 return;
         }
 
         int raw_socket_recieve;
-        if(!raw_socket_maker(IPPROTO_ICMP, &raw_socket_recieve)){
+        if(!raw_socket_maker(IPPROTO_ICMP, &raw_socket_recieve, false)){
                 fprintf(stderr, "Error: An error occured opening the raw socket.");
                 return;
         }
@@ -552,14 +599,14 @@ void scan_udp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
 
                                                 ssize_t recieved = recvfrom(raw_socket_recieve, buffer, sizeof(buffer), 0, (struct sockaddr *)&sender, &sender_length);
 
-                                                matching_ips = analyze_ips(buffer, source_ip, target);
+                                                matching_ips = analyze_ips(buffer, target);
 
                                                 if(matching_ips == 1){
                                                         continue;
                                                 }
 
                                                 if(recieved > 0){
-                                                        int state = analyze_udp_response(buffer);
+                                                        int state = analyze_udp_response(buffer, false);
                                                         if(state == -1){
                                                                 printf("%s %d udp open\n", inet_ntoa(target_wrapper.sin_addr), index);
                                                         }else if (state == 1){
@@ -577,9 +624,15 @@ void scan_udp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
         return;
 }
 
-void scan_udp_ipv6(struct in6_addr source_ip, int* ports_array, struct in6_addr target) {
-        int raw_socket;
-        if(!raw_socket_maker(IPPROTO_UDP, &raw_socket)){
+void scan_udp_ipv6(struct in6_addr source_ip, int* ports_array, struct in6_addr target, int timeout) {
+        int raw_socket_send;
+        if(!raw_socket_maker(IPPROTO_UDP, &raw_socket_send, true)){
+                fprintf(stderr, "Error: An error occured opening the raw socket.");
+                return;
+        }
+
+        int raw_socket_recieve;
+        if(!raw_socket_maker(IPPROTO_ICMPV6, &raw_socket_recieve, true)){
                 fprintf(stderr, "Error: An error occured opening the raw socket.");
                 return;
         }
@@ -587,35 +640,92 @@ void scan_udp_ipv6(struct in6_addr source_ip, int* ports_array, struct in6_addr 
         struct sockaddr_in6 target_wrapper;
         memset(&target_wrapper, 0, sizeof(target_wrapper));
         target_wrapper.sin6_family = AF_INET6;
-        memcpy(&target_wrapper.sin6_addr, &target, sizeof(struct in6_addr));
+        target_wrapper.sin6_addr = target;
         
         struct sockaddr_in6 src_wrapper;
         src_wrapper.sin6_family = AF_INET6;
-        memcpy(&target_wrapper.sin6_addr, &source_ip, sizeof(struct in6_addr));
+        src_wrapper.sin6_addr = source_ip;
 
-        if (bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) {
+        if (bind(raw_socket_send, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) {
                 perror("Binding source IP failed");
-                close(raw_socket);
+                close(raw_socket_send);
+                close(raw_socket_recieve);
                 return;
         }
         
         for(int index = 0; index < MAX_PORTS; index++){
                 if(ports_array[index]){
                         struct udphdr udp_header;
-                        construct_udp_header(&target, (uint16_t) index, &udp_header, true, &source_ip);
                         
-                        ssize_t bytes_sent = sendto(raw_socket, &udp_header, sizeof(udp_header), 0, (struct sockaddr *)&target_wrapper, sizeof(target_wrapper));
+                        char target_ip_str[INET6_ADDRSTRLEN];
+                        inet_ntop(AF_INET6, &target, target_ip_str, sizeof(target_ip_str));
 
-                        if (bytes_sent == -1) {
-                            fprintf(stderr, "Error: Failed to send the packet.");
-                        } else {
-                                char target_ip_str[INET6_ADDRSTRLEN];
-                                inet_ntop(AF_INET6, &target_wrapper.sin6_addr, target_ip_str, sizeof(target_ip_str));
-                                printf("[+] Sent TCP SYN to %s:%d\n", target_ip_str, index);
-                        }
+                                construct_udp_header(&target, (uint16_t) index, &udp_header, true, &source_ip);
+                                
+                                ssize_t bytes_sent = sendto(raw_socket_send, &udp_header, sizeof(udp_header), 0, (struct sockaddr *)&target_wrapper, sizeof(target_wrapper));
+
+                                if (bytes_sent == -1) {
+                                fprintf(stderr, "Error: Failed to send the packet.");
+                                }
+
+
+
+                                fd_set read_content;
+                                FD_ZERO(&read_content);
+                                FD_SET(raw_socket_recieve, &read_content);
+
+                                struct timeval timeout_struct;
+                                timeout_struct.tv_usec = 0;
+                                timeout_struct.tv_sec = timeout/1000;
+
+                                int matching_ips = 1;
+
+                                while(matching_ips == 1){
+
+                                        int waiter = select(raw_socket_recieve + 1, &read_content, NULL, NULL, &timeout_struct);
+
+                                        if(waiter < 0){
+                                                printf("Error: Select() failed.");
+                                                close(raw_socket_recieve);
+                                                close(raw_socket_send);
+                                                return;
+                                        }
+
+                                        if(waiter == 0){
+
+                                                matching_ips = 0;
+
+                                                printf("%s %d udp open\n", target_ip_str, index);
+
+                                        }else{
+                                                struct sockaddr_in6 sender;
+                                               socklen_t sender_length = sizeof(sender);
+                                                char buffer[1024];
+
+                                                ssize_t recieved = recvfrom(raw_socket_recieve, buffer, sizeof(buffer), 0, (struct sockaddr *)&sender, &sender_length);
+
+                                                matching_ips = analyze_ips6(sender.sin6_addr, target);
+
+                                                if(matching_ips == 1){
+                                                        continue;
+                                                }
+
+                                                if(recieved > 0){
+                                                        int state = analyze_udp_response(buffer, true);
+                                                        if(state == -1){
+                                                                printf("%s %d udp open\n", target_ip_str, index);
+                                                        }else if (state == 1){
+                                                                printf("%s %d udp closed\n", target_ip_str, index);
+                                                        }
+                                                }
+                                                break;
+                                        }
+                                }
+                        sleep(1);
                 }
         }
-        close(raw_socket);
+        close(raw_socket_recieve);
+        close(raw_socket_send);
         return;
 }
 
@@ -699,7 +809,7 @@ void iterate_domain_ips(char* domain, int* tcp_ports, int* udp_ports, uint32_t s
                         inet_ntop(found->ai_family, addr, ip, sizeof(ip));
                         printf("IPv6: %s\n", ip);
                         scan_tcp_ipv6(ipv6->sin6_addr, tcp_ports, source_ipv6, DEFAULT_TIMEOUT);
-                        scan_udp_ipv6(ipv6->sin6_addr, udp_ports, source_ipv6);
+                        scan_udp_ipv6(ipv6->sin6_addr, udp_ports, source_ipv6, DEFAULT_TIMEOUT);
                 }
         }
 
@@ -982,7 +1092,7 @@ int main(int argc, char *argv[]){
 	        }
 	        
 	        scan_tcp_ipv6(converted_ipv6, tcp_ports, source_ipv6, DEFAULT_TIMEOUT);
-                //scan_udp_ipv6(converted_ipv6, udp_ports, source_ipv6);
+                scan_udp_ipv6(converted_ipv6, udp_ports, source_ipv6, DEFAULT_TIMEOUT);
 	}
 	return 0;
 }
