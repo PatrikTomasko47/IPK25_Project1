@@ -20,7 +20,7 @@
 bool print_available_interfaces();
 
 /**
- * @brief Converts the string containing the source_ip to uint32_t or struct in6_addr.
+ * @brief Converts the string containing the interface to uint32_t or struct in6_addr.
  * 
  * @param interface The string containing the source IP.
  * @param return_pointer The pointer to which the IP will get copied.

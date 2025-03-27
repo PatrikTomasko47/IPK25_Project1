@@ -54,6 +54,9 @@ uint16_t udp_checksum(void* source_ip, void* dest_ip, struct udphdr* udp_header,
                 
                 final_length = sizeof(struct pseudo_header_ipv6) + udp_length; //length of the data that will be given to calculate checksum
                 buffer = malloc(final_length);
+
+                if(buffer == NULL)
+                        return 0;
                 
                 memcpy(buffer, &p_header, sizeof(struct pseudo_header_ipv6));
                 memcpy(buffer + sizeof(struct pseudo_header_ipv6) / 2, udp_header, udp_length); //copying the headers for the checksum calculation
@@ -71,6 +74,9 @@ uint16_t udp_checksum(void* source_ip, void* dest_ip, struct udphdr* udp_header,
                 final_length = sizeof(struct pseudo_header_ipv4) + udp_length; //length of the data that will be given to calculate checksum
                 buffer = malloc(final_length);
                 
+                if(buffer == NULL)
+                        return 0;
+
                 memcpy(buffer, &p_header, sizeof(struct pseudo_header_ipv4));
                 memcpy(buffer + sizeof(struct pseudo_header_ipv4) / 2, udp_header, udp_length); //copying the headers for the checksum calculation
 
@@ -100,6 +106,9 @@ uint16_t tcp_checksum(void* source_ip, void* dest_ip, struct tcphdr* tcp_header,
                 
                 final_length = sizeof(struct pseudo_header_ipv6) + tcp_length; //length of the data that will be given to calculate checksum
                 buffer = malloc(final_length);
+
+                if(buffer == NULL)
+                        return 0;
                 
                 memcpy(buffer, &p_header, sizeof(struct pseudo_header_ipv6));
                 memcpy(buffer + sizeof(struct pseudo_header_ipv6) / 2, tcp_header, tcp_length); //copying the headers for the checksum calculation
@@ -115,6 +124,9 @@ uint16_t tcp_checksum(void* source_ip, void* dest_ip, struct tcphdr* tcp_header,
                 
                 final_length = sizeof(struct pseudo_header_ipv4) + tcp_length; //length of the data that will be given to calculate checksum
                 buffer = malloc(final_length);
+
+                if(buffer == NULL)
+                        return 0;
                 
                 memcpy(buffer, &p_header, sizeof(struct pseudo_header_ipv4));
                 memcpy(buffer + sizeof(struct pseudo_header_ipv4) / 2, tcp_header, tcp_length); //copying the headers for the checksum calculation

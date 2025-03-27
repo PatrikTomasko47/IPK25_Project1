@@ -351,22 +351,48 @@ bool scan_tcp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr sou
                                 
                                 ssize_t bytes_sent = sendto(raw_socket, &tcp_header, sizeof(tcp_header), 0, (struct sockaddr *)&target_wrapper, sizeof(target_wrapper));
 
-                                if (bytes_sent == -1)
-                                fprintf(stderr, "Error: Failed to send the packet.\n");
+                                if (bytes_sent == -1){
+
+                                        fprintf(stderr, "Error: Failed to send the packet.\n");
+                                        close(raw_socket);
+                                        return false;
+
+                                }
 
                                 fd_set read_content;
-                                FD_ZERO(&read_content);
-                                FD_SET(raw_socket, &read_content);
 
-                                struct timeval timeout_struct;
-                                timeout_struct.tv_usec = (timeout % 1000) * 1000;
-                                timeout_struct.tv_sec = timeout / 1000;
+                                struct timeval timeout_struct, start_time, recieve_time;
+
+                                int elapsed_time = 0;
+
+                                gettimeofday(&start_time, NULL);
 
                                 int matching_ips = 1; //used to determine and await a packet coming from the correct IP address
 
                                 while(matching_ips == 1){
 
-                                        int waiter = select(raw_socket + 1, &read_content, NULL, NULL, &timeout_struct);
+                                        gettimeofday(&recieve_time, NULL);
+
+                                        elapsed_time = (recieve_time.tv_sec - start_time.tv_sec) * 1000 + (recieve_time.tv_usec - start_time.tv_usec) / 1000;
+
+                                        int remaining_time = timeout - elapsed_time; //updating the time in case of recieving a packet that is not from the scanning target
+
+                                        if(remaining_time < 0)
+                                                remaining_time = 0;
+
+                                        int waiter = 0;
+
+                                        if(remaining_time != 0){
+
+                                                timeout_struct.tv_sec = remaining_time / 1000;
+                                                timeout_struct.tv_usec = (remaining_time % 1000) * 1000;
+
+                                                FD_ZERO(&read_content);
+                                                FD_SET(raw_socket, &read_content);
+
+                                                waiter = select(raw_socket + 1, &read_content, NULL, NULL, &timeout_struct);
+
+                                        }
 
                                         if(waiter < 0){
 
@@ -479,22 +505,49 @@ bool scan_udp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
                                 
                                 ssize_t bytes_sent = sendto(raw_socket_send, &udp_header, sizeof(udp_header), 0, (struct sockaddr*)&target_wrapper, sizeof(target_wrapper));
 
-                                if (bytes_sent == -1) 
+                                if (bytes_sent == -1){
+
                                         fprintf(stderr, "Error: Failed to send the packet.\n");
+                                        close(raw_socket_recieve);
+                                        close(raw_socket_send);
+                                        return false;
+
+                                }
 
                                 fd_set read_content;
-                                FD_ZERO(&read_content);
-                                FD_SET(raw_socket_recieve, &read_content);
 
-                                struct timeval timeout_struct;
-                                timeout_struct.tv_usec = (timeout % 1000) * 1000;
-                                timeout_struct.tv_sec = timeout / 1000;
+                                struct timeval timeout_struct, start_time, recieve_time;
+
+                                int elapsed_time = 0;
+
+                                gettimeofday(&start_time, NULL);
 
                                 int matching_ips = 1; //catching packets until the ip of the source matches to the one we sent to
 
                                 while(matching_ips == 1){
 
-                                        int waiter = select(raw_socket_recieve + 1, &read_content, NULL, NULL, &timeout_struct);
+                                        gettimeofday(&recieve_time, NULL);
+
+                                        elapsed_time = (recieve_time.tv_sec - start_time.tv_sec) * 1000 + (recieve_time.tv_usec - start_time.tv_usec) / 1000;
+
+                                        int remaining_time = timeout - elapsed_time; //updating the time in case of recieving a packet that is not from the scanning target
+
+                                        if(remaining_time < 0)
+                                                remaining_time = 0;
+
+                                        int waiter = 0;
+
+                                        if(remaining_time != 0){
+
+                                                timeout_struct.tv_sec = remaining_time / 1000;
+                                                timeout_struct.tv_usec = (remaining_time % 1000) * 1000;
+
+                                                FD_ZERO(&read_content);
+                                                FD_SET(raw_socket_recieve, &read_content);
+
+                                                waiter = select(raw_socket_recieve + 1, &read_content, NULL, NULL, &timeout_struct);
+
+                                        }
 
                                         if(waiter < 0){
 
@@ -608,18 +661,39 @@ bool scan_udp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr sou
 
 
                                 fd_set read_content;
-                                FD_ZERO(&read_content);
-                                FD_SET(raw_socket_recieve, &read_content);
 
-                                struct timeval timeout_struct;
-                                timeout_struct.tv_usec = (timeout % 1000) * 1000;
-                                timeout_struct.tv_sec = timeout / 1000;
+                                struct timeval timeout_struct, start_time, recieve_time;
+
+                                int elapsed_time = 0;
+
+                                gettimeofday(&start_time, NULL);
 
                                 int matching_ips = 1; //catching packets until the ip of the source matches to the one we sent to
 
                                 while(matching_ips == 1){
 
-                                        int waiter = select(raw_socket_recieve + 1, &read_content, NULL, NULL, &timeout_struct);
+                                        gettimeofday(&recieve_time, NULL);
+
+                                        elapsed_time = (recieve_time.tv_sec - start_time.tv_sec) * 1000 + (recieve_time.tv_usec - start_time.tv_usec) / 1000;
+
+                                        int remaining_time = timeout - elapsed_time; //updating the time in case of recieving a packet that is not from the scanning target
+
+                                        if(remaining_time < 0)
+                                                remaining_time = 0;
+
+                                        int waiter = 0;
+
+                                        if(remaining_time != 0){
+
+                                                timeout_struct.tv_sec = remaining_time / 1000;
+                                                timeout_struct.tv_usec = (remaining_time % 1000) * 1000;
+
+                                                FD_ZERO(&read_content);
+                                                FD_SET(raw_socket_recieve, &read_content);
+
+                                                waiter = select(raw_socket_recieve + 1, &read_content, NULL, NULL, &timeout_struct);
+
+                                        }
 
                                         if(waiter < 0){
 

@@ -65,7 +65,7 @@ bool port_parser(char* ports_string, int* ports_array, bool* filled){
 
                                 if(start > end || start <= 0 || end > MAX_PORTS){
 
-                                        fprintf(stderr, "Error: The values in the port range are in the wrong order. The value to the left (%d) has to be smaller than the value on the right (%d).\n", start, end);
+                                        fprintf(stderr, "Error: The values in the port range are in the wrong order or out of the allowed range.\nThe value to the left (%d) has to be smaller than the value on the right (%d) and both have to be inside 0-65535.\n", start, end);
                                         return false;
 
                                 }
@@ -122,18 +122,20 @@ int get_input_params(int argc, char *argv[], char** interface, int* wait, char**
         //used to see wether the user input certain important values
         bool wait_input = false;
         bool interface_input = false;
+        bool help = false;
         
         static struct option long_options[] = {
                 {"interface", optional_argument, NULL, 'i'},
                 {"wait", required_argument, NULL, 'w'},
                 {"pt", required_argument, NULL, 't'},
                 {"pu", required_argument, NULL, 'u'},
+                {"help", no_argument, NULL, 'h'},
                 {0, 0, 0, 0}
         };
 
         int flag;
 
-        while((flag = getopt_long(argc, argv, "i::w:t:u:", long_options, NULL)) != -1){
+        while((flag = getopt_long(argc, argv, "i::w:t:u:h", long_options, NULL)) != -1){
 
                 switch(flag){
 
@@ -141,10 +143,10 @@ int get_input_params(int argc, char *argv[], char** interface, int* wait, char**
 
                                 if(optarg){
 
-                                        if(!*interface){ //checking wether user hasn't already input it
-
+                                        if(!interface_input){ //checking wether user hasn't already input it
+                                                
                                                 *interface = argv[optind];
-                                                interface_input = false;
+                                                interface_input = true;
 
                                         }else{
 
@@ -157,7 +159,7 @@ int get_input_params(int argc, char *argv[], char** interface, int* wait, char**
                                         //has to do it manually like this since I needed to be able to have an empty -i flag but it wasn't cooperating
                                         if (optind < argc && argv[optind][0] != '-') {
 
-                                                if (!*interface) {
+                                                if (!interface_input) {
 
                                                         interface_input = true;
                                                         *interface = argv[optind];
@@ -186,6 +188,21 @@ int get_input_params(int argc, char *argv[], char** interface, int* wait, char**
                                         }
 
                                 }
+                                break;
+
+                        case 'h':
+
+                                if(help == true){
+
+                                        fprintf(stderr, "Error: multiple -h/--help flags were detected.\n");
+                                        return 1;   
+
+                                }else{
+
+                                        help = true;
+
+                                }
+
                                 break;
 
                         case 'w':
@@ -268,7 +285,7 @@ int get_input_params(int argc, char *argv[], char** interface, int* wait, char**
 
         }
 
-        if(interface_input && !*interface && !wait_input && !*udp_ports_string && !*tcp_ports_string && optind >= argc){ //the user only input enpty -i meaning interface will get printed
+        if(!help && interface_input && !*interface && !wait_input && !*udp_ports_string && !*tcp_ports_string && optind >= argc){ //the user only input enpty -i meaning interface will get printed
 
                 if(!print_available_interfaces()){
 
@@ -279,6 +296,60 @@ int get_input_params(int argc, char *argv[], char** interface, int* wait, char**
                         return 2;
 
                 }
+
+        }
+
+        if(help && !interface_input && !*interface && !wait_input && !*udp_ports_string && !*tcp_ports_string && optind >= argc){ //the user only input help flag -> printing help text
+
+                printf("Usage:\n"
+        "  ./ipk-l4-scan [-i interface | --interface interface]\n"
+        "                [--pt port-ranges | --pu port-ranges] | [-t port-ranges | -u port-ranges]\n"
+        "                [-w timeout | --wait timeout]\n"
+        "                [hostname | ip-address | 'localhost']\n\n"
+
+        "Options:\n"
+        "  -h, --help\n"
+        "      Show this help message.\n\n"
+
+        "  -i interface, --interface interface\n"
+        "      Select the network interface for scanning (e.g., eth0).\n"
+        "      If only an empty interface flag is detected or no input value at all, lists all active interfaces.\n\n"
+
+        "  -t port-ranges, --pt port-ranges\n"
+        "      Specify TCP ports to scan.\n"
+        "        e.g., --pt 22,80-85,443\n\n"
+
+        "  -u port-ranges, --pu port-ranges\n"
+        "      Specify UDP ports to scan.\n"
+        "        e.g., --pu 53,67-69,161-162\n\n"
+
+        "  -w timeout, --wait timeout\n"
+        "      Set the timeout in milliseconds to wait for a response per scanned port.\n"
+        "      Default is 5000 ms.\n\n"
+
+        "  hostname | ip-address\n"
+        "      Target domain name or IPv4/IPv6 address or localhost to scan.\n\n"
+
+        "Examples:\n"
+        "  ./ipk-l4-scan --interface eth0 -t 22,80-85 -u 53,67-69 example.com\n"
+        "  ./ipk-l4-scan -i eth0 --pt 22,443 --pu 53 192.168.1.1\n"
+        "  ./ipk-l4-scan --interface       # Lists all available interfaces\n\n"
+
+        "Output Format:\n"
+        "  Each result of a scan is printed as a single line in the format:\n"
+        "    [IP address] [port number] [protocol] [status]\n\n"
+
+        "  Example output:\n"
+        "    127.0.0.1 22 tcp open\n"
+        "    127.0.0.1 53 udp closed\n\n"
+
+        "Note that if you want to use the program and have it function properly you either have to launch it with sudo or use 'make setuid' to give it the necessary privileges.");
+                return 2;
+
+        }else if (help){
+
+                fprintf(stderr, "Error: Help flag was detected among other flags/values.\n");
+                return 1;
 
         }
 

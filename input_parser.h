@@ -50,7 +50,7 @@ bool port_parser(char* ports_string, int* ports_array, bool* filled);
  * @param udp_ports_string Pointer to return the UDP ports to be scanned.
  * @param tcp_ports_string Pointer to return the UDP ports to be scanned.
  * 
- * @return 0 if the information was extracted successfully, 1 if an error occured or the user input wrong parameters, 2 if the interfaces were printed out.
+ * @return 0 if the information was extracted successfully, 1 if an error occured or the user input wrong parameters, 2 if the interfaces were printed out or help.
  */
 int get_input_params(int argc, char *argv[], char** interface, int* wait, char** target, char** udp_ports_string, char** tcp_ports_string);
 

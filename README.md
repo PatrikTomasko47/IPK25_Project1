@@ -34,6 +34,8 @@ Components of a packet:
 
  ## Implementation details
 
+The program part of this project is implemented in multiple files. The main file that combines the other file to achieve the goal of this project is `ipk-l4-scan.c`. All the parts of the program are described lower in more detail.
+
 ### TCP construction and scanning
 
 #### TCP Header construction
@@ -247,22 +249,49 @@ construct_udp_header(&target, (uint16_t) index, &udp_header, false, &source_ip);
 
 ssize_t bytes_sent = sendto(raw_socket_send, &udp_header, sizeof(udp_header), 0, (struct sockaddr*)&target_wrapper, sizeof(target_wrapper));
 
-if (bytes_sent == -1) 
+if (bytes_sent == -1){
+
         fprintf(stderr, "Error: Failed to send the packet.\n");
+        close(raw_socket_recieve);
+        close(raw_socket_send);
+        return false;
+
+}
 
 fd_set read_content;
-FD_ZERO(&read_content);
-FD_SET(raw_socket_recieve, &read_content);
 
-struct timeval timeout_struct;
-timeout_struct.tv_usec = (timeout % 1000) * 1000;
-timeout_struct.tv_sec = timeout / 1000;
+struct timeval timeout_struct, start_time, recieve_time;
+
+int elapsed_time = 0;
+
+gettimeofday(&start_time, NULL);
 
 int matching_ips = 1; //catching packets until the ip of the source matches to the one we sent to
 
 while(matching_ips == 1){
 
-        int waiter = select(raw_socket_recieve + 1, &read_content, NULL, NULL, &timeout_struct);
+        gettimeofday(&recieve_time, NULL);
+
+        elapsed_time = (recieve_time.tv_sec - start_time.tv_sec) * 1000 + (recieve_time.tv_usec - start_time.tv_usec) / 1000;
+
+        int remaining_time = timeout - elapsed_time; //updating the time in case of recieving a packet that is not from the scanning target
+
+        if(remaining_time < 0)
+                remaining_time = 0;
+
+        int waiter = 0;
+
+        if(remaining_time != 0){
+
+                timeout_struct.tv_sec = remaining_time / 1000;
+                timeout_struct.tv_usec = (remaining_time % 1000) * 1000;
+
+                FD_ZERO(&read_content);
+                FD_SET(raw_socket_recieve, &read_content);
+
+                waiter = select(raw_socket_recieve + 1, &read_content, NULL, NULL, &timeout_struct);
+
+        }
 
         if(waiter < 0){
 
@@ -330,15 +359,16 @@ When calculating a checksum a pseudo header is needed. The reasoning behind this
 TCP (IPV4)
 
 <pre>
-struct pseudo_header_ipv4 p_header;
-p_header.source_ip = *((uint32_t *)source_ip);
-p_header.destination_ip = *((uint32_t *)dest_ip);
-p_header.zero = 0;
-p_header.protocol = IPPROTO_TCP;
-p_header.udp_tcp_length = htons(tcp_length);
+struct pseudo_header_ipv4{
+    uint32_t source_ip;
+    uint32_t destination_ip;
+    uint8_t zero;
+    uint8_t protocol;
+    uint16_t udp_tcp_length;
+};
 </pre>
 
-Here we can see how the TCP pseudo header gets constructed. The UDP header is basically the same, only having different protocol and udp length instead of tcp length.
+Here we can see how the Pseudo header for IPV4 looks like. The IPV6 version is basically the same, only having different types of the source and destination IP.
 
 #### Checksum calculation
 
@@ -375,47 +405,615 @@ This first calculates the buffer by summing the 16-bit words in the buffer. In c
 
 ### User input processing
 
+The user input gets processed by the functions defined in the `input_parser.c/.h` files. The main function is the `get_input_params` function which parses the user input using the `getopt_long` function which extracts the values of defined flags. The function also checks for missing values, target (has no flag) and value redefinition in which case it returns an error.
+It also calls the `print_available_interfaces` function if the user's input is either empty or there is just an empty -i flag.
 
+Apart from the `get_input params`. To process the user defined ports to be scanned there is the `port_parser` function which parses the given string and returns an array that holds ones on the indexes where the index equals to the port to be scanned. This function also uses the utility function `is_number` which checks wether a string is made up of digit characters.
+
+Last but not least the `determine_target_type` along with the `target_type` enum are used to check and determine the type of the given target (IPV4/IPV6/DOMAIN/LOCALHOST).
 
 ### Support utility
 
-## Usage
+The file `ip_utility.h/c` and `ll_ip_array.h/.c` contains functions that are used to assist other parts of the program. 
+
+The `ll_ip_array.c` defines two linked lists, one for IPV4 and the second for IPV6. It is used to avoid duplicate scanning when itterating through the IP addresses of a domain.
+
+The `ip_utility.c` defines 3 functions each with a different purpose.
+
+- `print_available_interfaces`: Prints out available interfaces in the special cases as defined in the assignment. For more detail look at Usage.
+
+- `convert_source_ip`: Takes the string containing the interface given by the user and converts it to an IP address.
+
+- `itterate_domain_ips`: Itterates through all the available IP addresses of a given domain. Avoids duplicates using the linked list from `ll_ip_array.c` and in the case of IP addresses that cannot be scanned due to the chosen interface not having a viable address of such version, notifies the user and skips such IP addresses.
 
 ## Testing
 
 ### Tested system
+The test we're executed on a Virtual Machine running on a host PC. The specifications are:
+
+Host PC:
+
+- OS: Microsoft Windows 11 Pro (10.0.26100 Build 26100)
+- CPU: Intel(R) Core(TM) i5-9600KF CPU @ 3.70GHz, 3696 Mhz, cores: 6, logical processors: 6
+- RAM: 16GB
+- GPU: NVIDIA GeForce RTX 2070 SUPER
+- NIC: D-Link DWA-582 Wireless AC1200 Dual Band PCI Express Adapter
+- Hypervision used: VirtualBox
+
+VM:
+
+- OS: Ubuntu 24.04.1 LTS
+- Number of vCPUs: 4
+- Allocated RAM: 2GB
+- Disk size: 32GB
+- Networking: NAT
+
+Each of the tests will have a result log located in the `test_results` folder. The name of the log and pcap will be written next to the name of the test. Within the .log files will be the stdout/stderr and underneath that will be the program exit code.
+
+Note that before testing the <pre>make setuid</pre> was launched to not have to launch the program with sudo.
 
 ### Input parameters testing
 
-#### Interface printing
+The first part tests the input parameters to see wether the program can handle missing and/or unexpected input parameters. The special behavior described in the assignment like interface printing and help will also be tested.
 
-#### Missing arguments
+#### Error testing
 
-#### Bad input values
+##### Multiple interfaces test (m_i_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user inputs multiple interfaces.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan 8.8.8.8 -t 53 -w 2000 -i enp0s3 -i lo</pre>
+
+- Actual output: <pre>Error: multiple -i/--interface inputs detected.
+1
+</pre>
+
+- Result: success
+
+##### Multiple empty interface flags test (m_if_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user inputs multiple interface flags.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan 8.8.8.8 -t 53 -w 2000 -i -i -i lo</pre>
+
+- Actual output: <pre>Error: multiple -i/--interface inputs were detected.
+1
+</pre>
+
+- Result: success
+
+##### Multiple tcp ports declarations test (m_t_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user inputs multiple tcp port inputs.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan 8.8.8.8 -t 53 -t 1-5 -w 2000 -i enp0s3</pre>
+
+- Actual output: <pre>Error: multiple -t/--pt inputs were detected.
+1
+</pre>
+
+- Result: success
+
+##### Multiple tcp ports declarations test (m_u_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user inputs multiple udp port inputs.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan 8.8.8.8 -u 53 -u 1-5 -w 2000 -i enp0s3</pre>
+
+- Actual output: <pre>Error: multiple -u/--pu inputs were detected.
+1
+</pre>
+
+- Result: success
+
+##### An unknown flag test (uf_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user inputs an unidentified flag.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan 8.8.8.8 -u 53 -w 2000 -i enp0s3 -g</pre>
+
+- Actual output: <pre>./ipk-l4-scan: invalid option -- 'g'
+Error: An unknown flag was '?' detected.
+1</pre>
+
+- Result: success
+
+##### Missing target test (miss_t_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user doesn't specify a target.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan -u 53 -w 2000 -i enp0s3</pre>
+
+- Actual output: <pre>Error: No target specified.
+1</pre>
+
+- Result: success
+
+##### Extra parameter test (e_p_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user inputs more than one targets.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan -u 53 -w 2000 -i enp0s3 8.8.8.8 1.1.1.1</pre>
+
+- Actual output: <pre>Error: An unexpected argument was detected after the target.
+1</pre>
+
+- Result: success
+
+##### Missing ports test (miss_p_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user doesn't specify any UDP or TCP ports.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan -w 2000 -i enp0s3 8.8.8.8</pre>
+
+- Actual output: <pre>Error: At least a single UDP or TCP port has to be specified.
+1</pre>
+
+- Result: success
+
+##### Missing interface test (miss_i_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user doesn't specify an interface.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan -w 2000 -t 50 8.8.8.8</pre>
+
+- Actual output: <pre>Error: No interface specified. To wiev available interfaces -> './ipk-l4-scan -i' or './ipk-l4-scan'.
+1</pre>
+
+- Result: success
+
+##### Bad_interface_test (b_i_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a the interface specified by the user id not of suported format.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan -w 2000 -t 50 8.8.8.8 -i nonexistingbadinterface1234.</pre>
+
+- Actual output: <pre>Error: The interface you want to use 'nonexistingbadinterface1234.' does not have an suitable ipv4 address.
+1</pre>
+
+- Result: failure, the error was caught by another if, the type of the interface was wrongly incorrectly as ipv4
+
+##### Non-number port test (nn_p_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user provides a port that is not a number.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan -w 2000 -t 5a 8.8.8.8 -i enp0s3</pre>
+
+- Actual output: <pre>Error: A non-number value has been detected in the ports to be scanned.
+1</pre>
+
+- Result: success
+
+##### Non_number port range test (nn_pr_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user provides a port range where one of the number is not a number.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan -w 2000 -t 5a-90 8.8.8.8 -i enp0s3</pre>
+
+- Actual output: <pre>Error: A non-number value has been detected in the port range.
+1</pre>
+
+- Result: success
+
+##### Wrong order port range test (wo_pr_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user provides a port range where the number on the left is bigger than the number on righ.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan -w 2000 -t 6-5 8.8.8.8 -i enp0s3</pre>
+
+- Actual output: <pre>Error: The values in the port range are in the wrong order or out of the allowed range.
+The value to the left (6) has to be smaller than the value on the right (5) and both have to be inside 0-65535.
+1</pre>
+
+- Result: success
+
+##### Port out of allowed range test (or_p_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user provides a port that is out of the possible port range.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan -w 2000 -t 70000 8.8.8.8 -i enp0s3</pre>
+
+- Actual output: <pre>Error: The port you entered (70000) is out of the allowed range.
+1</pre>
+
+- Result: success
+
+##### Port range out of allowed range test (or_pr_test.log)
+
+Testing wether the program returns an error message and exits with a 1 if a user provides a port range in which one of the numbers is out of the possible port range.
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan -w 2000 -t 20-70500 8.8.8.8 -i enp0s3</pre>
+
+- Actual output: <pre>Error: The values in the port range are in the wrong order or out of the allowed range.
+The value to the left (20) has to be smaller than the value on the right (70500) and both have to be inside 0-65535.
+1</pre>
+
+- Result: success
+
+#### Help printing (help_test.log)
+
+Testing wether the program prints out the help text when user enters the help flag.
+
+- Expected output: Help text and exit code 0.
+
+- Input: <pre>./ipk-l4-scan --help</pre>
+
+- Actual output: <pre>Usage:
+  ./ipk-l4-scan [-i interface | --interface interface]
+                [--pt port-ranges | --pu port-ranges] | [-t port-ranges | -u port-ranges]
+                [-w timeout | --wait timeout]
+                [hostname | ip-address | 'localhost']
+
+Options:
+  -h, --help
+      Show this help message.
+
+  -i interface, --interface interface
+      Select the network interface for scanning (e.g., eth0).
+      If only an empty interface flag is detected or no input value at all, lists all active interfaces.
+
+  -t port-ranges, --pt port-ranges
+      Specify TCP ports to scan.
+        e.g., --pt 22,80-85,443
+
+  -u port-ranges, --pu port-ranges
+      Specify UDP ports to scan.
+        e.g., --pu 53,67-69,161-162
+
+  -w timeout, --wait timeout
+      Set the timeout in milliseconds to wait for a response per scanned port.
+      Default is 5000 ms.
+
+  hostname | ip-address
+      Target domain name or IPv4/IPv6 address or localhost to scan.
+
+Examples:
+  ./ipk-l4-scan --interface eth0 -t 22,80-85 -u 53,67-69 example.com
+  ./ipk-l4-scan -i eth0 --pt 22,443 --pu 53 192.168.1.1
+  ./ipk-l4-scan --interface       # Lists all available interfaces
+
+Output Format:
+  Each result of a scan is printed as a single line in the format:
+    [IP address] [port number] [protocol] [status]
+
+  Example output:
+    127.0.0.1 22 tcp open
+    127.0.0.1 53 udp closed
+
+Note that if you want to use the program and have it function properly you either have to launch it with sudo or use 'make setuid' to give it the necessary privileges.0
+</pre>
+
+- Result: success
+
+#### Interface printing variant 1(i_test1.log)
+
+Testing wether the program prints out available interfaces if the user doesnt enter anything
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan</pre>
+
+- Actual output: <pre>Active network interfaces:
+lo
+enp0s3
+0</pre>
+
+- Result: success
+
+#### Interface printing variant 2(i_test2.log)
+
+Testing wether the program prints out available interfaces if the user doesnt enter anything
+
+- Expected output: Error message and exit code 1.
+
+- Input: <pre>./ipk-l4-scan -i</pre>
+
+- Actual output: <pre>Active network interfaces:
+lo
+enp0s3
+0</pre>
+
+- Result: success
 
 ### Port scanning testing (IPV4)
 
 #### TCP
 
+##### Scanning multiple ports (t_4_mp_test.log, t_4_mp_test.pcap)
+
+Testing wether the program succesfully scans multiple ports.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i enp0s3 8.8.8.8 -t 52-54</pre>
+
+- Actual output: <pre>8.8.8.8 52 tcp filtered
+8.8.8.8 53 tcp open
+8.8.8.8 54 tcp filtered
+0</pre>
+
+- Result: success, the ports are visible in the pcap file and printed out correctly.
+
+##### Scanning open port (t_4_o_test.log, t_4_o_test.pcap)
+
+Testing wether the program succesfully scans an open port.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i enp0s3 8.8.8.8 -t 53</pre>
+
+- Actual output: <pre>8.8.8.8 53 tcp open
+0</pre>
+
+- Result: success, the ports are visible in the pcap file and printed out correctly.
+
+##### Scanning closed port (t_4_c_test.log, t_4_c_test.pcap)
+
+Testing wether the program succesfully scans an closed port.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i enp0s3 127.0.0.1 -t 50</pre>
+
+- Actual output: <pre>127.0.0.1 50 tcp closed
+0</pre>
+
+- Result: success, the ports are visible in the pcap file and printed out correctly.
+
+##### Scanning filtered port (t_4_f_test.log, t_4_f_test.pcap)
+
+Testing wether the program succesfully scans an filtered port.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i enp0s3 8.8.8.8 -t 50</pre>
+
+- Actual output: <pre>8.8.8.8 50 tcp filtered
+0</pre>
+
+- Result: success, the ports and the resend are visible in the pcap file and printed out correctly.
+
 #### UDP
+
+##### Scanning open port (u_4_o_test.log, u_4_o_test.pcap)
+
+Testing wether the program succesfully scans an open port.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i enp0s3 8.8.8.8 -u 53</pre>
+
+- Actual output: <pre>8.8.8.8 53 udp open
+0</pre>
+
+- Result: success, can see that the udp didn't recieve any icmp in the pcap.
+
+##### Scanning closed port (u_4_c_test.log, u_4_c_test.pcap)
+
+Testing wether the program succesfully scans an closed port.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i enp0s3 127.0.0.1 -u 53</pre>
+
+- Actual output: <pre>127.0.0.1 53 udp closed
+0</pre>
+
+- Result: success, can see that the udp recieved the icmp in the pcap.
 
 ### Port scanning testing (IPV6)
 
 #### TCP
 
+##### Scanning multiple ports (t_6_mp_test.log, t_6_mp_test.pcap)
+
+Testing wether the program succesfully scans multiple ports.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i tun0 2001:4860:4860::8888 -t 52-54 -w 500</pre>
+
+- Actual output: <pre>2001:4860:4860::8888 52 tcp filtered
+2001:4860:4860::8888 53 tcp open
+2001:4860:4860::8888 54 tcp filtered
+0</pre>
+
+- Result: success, the ports are visible in the pcap file and printed out correctly.
+
+##### Scanning open port (t_6_o_test.log, t_6_o_test.pcap)
+
+Testing wether the program succesfully scans an open port.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i tun0 2001:4860:4860::8888 -t 53</pre>
+
+- Actual output: <pre>2001:4860:4860::8888 53 tcp open
+0</pre>
+
+- Result: success, the ports are visible in the pcap file and printed out correctly.
+
+##### Scanning closed port (t_6_c_test.log, t_6_c_test.pcap)
+
+Testing wether the program succesfully scans an closed port.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i tun0 ::1 -t 50</pre>
+
+- Actual output: <pre>::1 50 tcp closed
+0</pre>
+
+- Result: success, the ports are visible in the pcap file and printed out correctly.
+
+##### Scanning filtered port (t_6_f_test.log, t_6_f_test.pcap)
+
+Testing wether the program succesfully scans an filtered port.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i tun0 2001:4860:4860::8888 -t 50 -w 500</pre>
+
+- Actual output: <pre>2001:4860:4860::8888 50 tcp filtered
+0
+</pre>
+
+- Result: success, the ports and the resend are visible in the pcap file and printed out correctly.
+
 #### UDP
+
+##### Scanning closed port (u_6_c_test.log, u_6_c_test.pcap)
+
+Testing wether the program succesfully scans an closed port.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i tun0 2001:4860:4860::8888 -u 53 -w 500</pre>
+
+- Actual output: <pre>2001:4860:4860::8888 53 udp open
+0</pre>
+
+- Result: failure, in the pcap we can see that the icmpv6 arrives but it doesn't have the code 4 type 1 that my script checks for.
+
+### Domain scanning
+
+#### Scanning a domain (d_s_test.log, d_s_test.pcap)
+
+Testing wether the program can scan a domain.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i tun0 scanme.nmap.org -u 51-55 -t 52-53,55 -w 500</pre>
+
+- Actual output: <pre>2600:3c01::f03c:91ff:fe18:bb2f 52 tcp closed
+2600:3c01::f03c:91ff:fe18:bb2f 53 tcp closed
+2600:3c01::f03c:91ff:fe18:bb2f 55 tcp closed
+2600:3c01::f03c:91ff:fe18:bb2f 51 udp closed
+2600:3c01::f03c:91ff:fe18:bb2f 52 udp closed
+2600:3c01::f03c:91ff:fe18:bb2f 53 udp closed
+2600:3c01::f03c:91ff:fe18:bb2f 54 udp closed
+2600:3c01::f03c:91ff:fe18:bb2f 55 udp closed
+45.33.32.156 52 tcp closed
+45.33.32.156 53 tcp closed
+45.33.32.156 55 tcp closed
+45.33.32.156 51 udp closed
+45.33.32.156 52 udp closed
+45.33.32.156 53 udp closed
+45.33.32.156 54 udp closed
+45.33.32.156 55 udp closed
+0</pre>
+
+- Result: success.
+
+#### Scanning a domain without IPV6 (d_s_wo6_test.log, d_s_wo6_test.pcap)
+
+Testing wether the program can scan a domain.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file, the ipv6 will be skipped.
+
+- Input: <pre>sudo ./ipk-l4-scan -i tun0 scanme.nmap.org -u 51-55 -t 52-53,55 -w 500</pre>
+
+- Actual output: <pre>45.33.32.156 52 tcp filtered
+45.33.32.156 53 tcp filtered
+45.33.32.156 55 tcp filtered
+45.33.32.156 51 udp open
+45.33.32.156 52 udp open
+45.33.32.156 53 udp open
+45.33.32.156 54 udp open
+45.33.32.156 55 udp open
+Skipping IPV6 since the chosen interface has no suitable IPV6 address.
+0</pre>
+
+- Result: success.
+
+### Localhost scanning (lh_test.log, lh_test.pcap)
+
+Testing wether the program can scan localhost without any issues.
+
+- Expected output: Scan results and exit code 0, visible packets in the pcap file.
+
+- Input: <pre>sudo ./ipk-l4-scan -i tun0 scanme.nmap.org -u 51-55 -t 52-53,55 -w 500</pre>
+
+- Actual output: <pre>127.0.0.1 52 tcp closed
+127.0.0.1 53 tcp closed
+127.0.0.1 55 tcp closed
+127.0.0.1 51 udp closed
+127.0.0.1 52 udp closed
+127.0.0.1 53 udp closed
+127.0.0.1 54 udp closed
+127.0.0.1 55 udp closed
+0</pre>
+
+- Result: success.
 
 ## Extra functionality
 
+There are a few extra functionalities that my implementation does and was not defined in the assignment, these are:
+
+- In the case of a domain having and IP of a version that cannot be scanned via the chosen interface the user is notified and the program skips such addresses.
+
+- When scanning UDP port the program always waits a second between each packet send to not get blacklisted by the target.
+
+- The user can input the ports it this format number-number,number-number,number, ... Basically he can input multiple intervals divided by a comma.
+
+- Makefile has the ability to set up the script to run as root so the user doesn't have to always write sudo before it. It is done by launching <pre>make setuid</pre>.
+
 ## Sources
-https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml
-https://www.cisco.com/c/en/us/solutions/small-business/resource-center/networking/what-is-a-packet.html
-https://www.cisco.com/c/en/us/solutions/collateral/enterprise-networks/ios-xr-software/white-paper-c11-740335.html
-https://www.cisco.com/c/en/us/solutions/collateral/ios-xr-software/udp-overview.html
-https://www.icann.org/resources/pages/dns-2012-02-25-en
-https://linux.die.net/man/3/htons
-https://stackoverflow.com/questions/22374040/understanding-the-tcp-checksum-function
+1. **IANA Service Names and Port Numbers**  
+   Available from: [IANA - Service Names and Port Numbers](https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml)
+
+2. **What is a Packet?**  
+   Cisco. Available from: [Cisco - What is a Packet?](https://www.cisco.com/c/en/us/solutions/small-business/resource-center/networking/what-is-a-packet.html)
+
+3. **IOS XR Software Overview**  
+   Cisco. Available from: [Cisco - IOS XR Overview](https://www.cisco.com/c/en/us/solutions/collateral/enterprise-networks/ios-xr-software/white-paper-c11-740335.html)
+
+4. **UDP Overview**  
+   Cisco. Available from: [Cisco - UDP Overview](https://www.cisco.com/c/en/us/solutions/collateral/ios-xr-software/udp-overview.html)
+
+5. **DNS Resources**  
+   ICANN. Available from: [ICANN - DNS Resources](https://www.icann.org/resources/pages/dns-2012-02-25-en)
+
+6. **htons Function in Linux**  
+   Linux Man Pages. Available from: [Linux Man Pages - htons](https://linux.die.net/man/3/htons)
+
+7. **Understanding the TCP Checksum Function**  
+   Stack Overflow. Available from: [Stack Overflow - TCP Checksum](https://stackoverflow.com/questions/22374040/understanding-the-tcp-checksum-function)
+
 
 ## Photo sources
-https://www.networkurge.com/2017/10/tcp-header-details.html
-https://notes.shichao.io/tcpv1/ch10/
+1. **TCP Header Details**  
+   Network Urge. Available from: [Network Urge - TCP Header Details](https://www.networkurge.com/2017/10/tcp-header-details.html)
+
+2. **TCPv1 Diagram**  
+   Available from: [TCPv1 Diagram](https://notes.shichao.io/tcpv1/ch10/)

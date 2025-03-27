@@ -9,8 +9,10 @@ all: $(TARGET)
 $(TARGET): $(SRC)
 	$(CC) $(CFLAGS) $(SRC) -o $(TARGET)
 
-run: $(TARGET)
-	./$(TARGET)
+setuid: $(TARGET)
+	@echo "Setting root ownership and setuid bit on $(TARGET)..."
+	sudo chown root:root $(TARGET)
+	sudo chmod u+s $(TARGET)
 
 clean: 
 	rm -f $(TARGET)
