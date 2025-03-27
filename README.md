@@ -51,6 +51,7 @@ Next to each of the elements of the TCP header is a number of bits. Fortunatelly
 - offset
 - window
 - checksum (it has to be calculated correctly otherwise the packet will be considered deformed and thrown away) 
+
 Underneath here you can see the part of my code that implements the creation of the TCP header. All the functions and utilities for the creation of TCP and UDP packets are localted in the `packet_buildre.c` file.
 
 <pre>        memset(header, 0, sizeof(struct tcphdr));
@@ -356,8 +357,6 @@ The calculation of the checksum is the most complex part of creating TCP/UDP hea
 
 When calculating a checksum a pseudo header is needed. The reasoning behind this is security. When we are generating the TCP/UDP header we do not yet have the IP header available but we still need a way to calculate the checksum and incorporate things that would be in the IP header such as the destination and source IP, this is where the pseudo header comes in which fills this position for the time of the TCP/UCP packet construction. The pseudo headers themselves are pretty simple. You can see the parts of the code in the `packet_builder.c` that implement the pseudo header generation.
 
-TCP (IPV4)
-
 <pre>
 struct pseudo_header_ipv4{
     uint32_t source_ip;
@@ -450,7 +449,7 @@ VM:
 
 Each of the tests will have a result log located in the `test_results` folder. The name of the log and pcap will be written next to the name of the test. Within the .log files will be the stdout/stderr and underneath that will be the program exit code.
 
-Note that before testing the <pre>make setuid</pre> was launched to not have to launch the program with sudo.
+Note that before testing the <pre>make setuid</pre> was launched to not have to launch the program with sudo but It had some trouble working so I then resolved to using sudo.
 
 ### Input parameters testing
 
