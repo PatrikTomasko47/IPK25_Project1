@@ -158,31 +158,32 @@ int analyze_udp_response(char* buffer, bool ipv6_mode){
 
 bool scan_tcp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int timeout) {
 
-        int raw_socket;
-
-        if(!raw_socket_maker(IPPROTO_TCP, &raw_socket, false))
-                return false;
-
         struct sockaddr_in target_wrapper;
         memset(&target_wrapper, 0, sizeof(target_wrapper));
         target_wrapper.sin_family = AF_INET;
         target_wrapper.sin_addr.s_addr = target;
         
-        struct sockaddr_in src_wrapper;
-        src_wrapper.sin_family = AF_INET;
-        src_wrapper.sin_addr.s_addr = source_ip;
-
-        if (bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) { //binding the socket to source ip
-                
-                fprintf(stderr,"Error: Binding source IP failed.\n");
-                close(raw_socket);
-                return false;
-
-        }
-        
         for(int index = 0; index < MAX_PORTS; index++){
 
                 if(ports_array[index]){
+
+                        int raw_socket;
+
+                        if(!raw_socket_maker(IPPROTO_TCP, &raw_socket, false))
+                                return false;
+
+                        struct sockaddr_in src_wrapper;
+                        src_wrapper.sin_family = AF_INET;
+                        src_wrapper.sin_addr.s_addr = source_ip;
+                        src_wrapper.sin_port = htons(index);
+                        
+                        if (bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) { //binding the socket to source ip
+                                        
+                                fprintf(stderr,"Error: Binding source IP failed.\n");
+                                close(raw_socket);
+                                return false;
+                        
+                        }
                         
                         struct tcphdr tcp_header;
                         int verify_filtered = 0;
@@ -279,40 +280,42 @@ bool scan_tcp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
 
                         }
 
+                        close(raw_socket);
+
                 }
 
         }
 
-        close(raw_socket);
         return true;
 
 }
 
 bool scan_tcp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr source_ip, int timeout) {
-        int raw_socket;
-        if(!raw_socket_maker(IPPROTO_TCP, &raw_socket, true)){
-                return false;
-        }
 
         struct sockaddr_in6 target_wrapper;
         memset(&target_wrapper, 0, sizeof(target_wrapper));
         target_wrapper.sin6_family = AF_INET6;
         target_wrapper.sin6_addr = target;
         
-        struct sockaddr_in6 src_wrapper;
-        memset(&src_wrapper, 0, sizeof(src_wrapper));
-        src_wrapper.sin6_family = AF_INET6;
-        src_wrapper.sin6_addr = source_ip;
-
-        if (bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) { //binding the socket to source ip
-                fprintf(stderr,"Error: Binding source IP failed.\n");
-                close(raw_socket);
-                return false;
-        }
-        
         for(int index = 0; index < MAX_PORTS; index++){
 
                 if(ports_array[index]){
+
+                        int raw_socket;
+                        if(!raw_socket_maker(IPPROTO_TCP, &raw_socket, true))
+                                return false;
+
+                        struct sockaddr_in6 src_wrapper;
+                        memset(&src_wrapper, 0, sizeof(src_wrapper));
+                        src_wrapper.sin6_family = AF_INET6;
+                        src_wrapper.sin6_addr = source_ip;
+                        src_wrapper.sin6_port = htons(index);
+                        
+                        if (bind(raw_socket, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) { //binding the socket to source ip
+                                fprintf(stderr,"Error: Binding source IP failed.\n");
+                                close(raw_socket);
+                                return false;
+                        }
 
                         struct tcphdr tcp_header;
                         int verify_filtered = 0;
@@ -404,11 +407,12 @@ bool scan_tcp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr sou
 
                         }
 
+                        close(raw_socket);
+
                 }
 
         }
 
-        close(raw_socket);
         return true;
 
 }
@@ -416,9 +420,6 @@ bool scan_tcp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr sou
 bool scan_udp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int timeout) {
 
         //making two sockets since the udp one is for sending and icmp for recieving
-        int raw_socket_send;
-        if(!raw_socket_maker(IPPROTO_UDP, &raw_socket_send, false))
-                return false;
 
         int raw_socket_recieve;
         if(!raw_socket_maker(IPPROTO_ICMP, &raw_socket_recieve, false))
@@ -429,22 +430,28 @@ bool scan_udp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
         target_wrapper.sin_family = AF_INET;
         target_wrapper.sin_addr.s_addr = target;
         
-        struct sockaddr_in src_wrapper;
-        src_wrapper.sin_family = AF_INET;
-        src_wrapper.sin_addr.s_addr = source_ip;
-
-        if (bind(raw_socket_send, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) { //binding the udp socket to source ip
-                fprintf(stderr,"Error: Binding source IP failed.\n");
-                close(raw_socket_recieve);
-                close(raw_socket_send);
-                return false;
-        }
-        
         for(int index = 0; index < MAX_PORTS; index++){
 
                 if(ports_array[index]){
 
-                        struct udphdr udp_header;
+                                int raw_socket_send;
+                                if(!raw_socket_maker(IPPROTO_UDP, &raw_socket_send, false))
+                                        return false;
+
+                                struct sockaddr_in src_wrapper;
+                                src_wrapper.sin_family = AF_INET;
+                                src_wrapper.sin_addr.s_addr = source_ip;
+                                src_wrapper.sin_port = htons(index);
+
+                        
+                                if (bind(raw_socket_send, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) { //binding the udp socket to source ip
+                                        fprintf(stderr,"Error: Binding source IP failed.\n");
+                                        close(raw_socket_recieve);
+                                        close(raw_socket_send);
+                                        return false;
+                                }
+
+                                struct udphdr udp_header;
 
                                 construct_udp_header(&target, (uint16_t) index, &udp_header, false, &source_ip);
                                 
@@ -515,7 +522,7 @@ bool scan_udp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
                                         }
 
                                 }
-
+                        close(raw_socket_send);
                         sleep(1); //waiting a second after each udp request so that i don't get blacklisted from any server
 
                 }
@@ -523,7 +530,6 @@ bool scan_udp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
         }
 
         close(raw_socket_recieve);
-        close(raw_socket_send);
         return true;
 
 }
@@ -531,9 +537,6 @@ bool scan_udp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
 bool scan_udp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr source_ip, int timeout) {
 
         //making two sockets since the udp one is for sending and icmp for recieving
-        int raw_socket_send;
-        if(!raw_socket_maker(IPPROTO_UDP, &raw_socket_send, true))
-                return false;
 
         int raw_socket_recieve;
         if(!raw_socket_maker(IPPROTO_ICMPV6, &raw_socket_recieve, true))
@@ -544,28 +547,34 @@ bool scan_udp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr sou
         target_wrapper.sin6_family = AF_INET6;
         target_wrapper.sin6_addr = target;
         
-        struct sockaddr_in6 src_wrapper;
-        memset(&src_wrapper, 0, sizeof(src_wrapper));
-        src_wrapper.sin6_family = AF_INET6;
-        src_wrapper.sin6_addr = source_ip;
-
-        if (bind(raw_socket_send, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) { //binding the socket to source ip
-
-                fprintf(stderr,"Error: Binding source IP failed.\n");
-                close(raw_socket_send);
-                close(raw_socket_recieve);
-                return false;
-
-        }
-        
         for(int index = 0; index < MAX_PORTS; index++){
 
                 if(ports_array[index]){
 
-                        struct udphdr udp_header;
+                                int raw_socket_send;
+                                if(!raw_socket_maker(IPPROTO_UDP, &raw_socket_send, true))
+                                        return false;
+
+                                struct sockaddr_in6 src_wrapper;
+                                memset(&src_wrapper, 0, sizeof(src_wrapper));
+                                src_wrapper.sin6_family = AF_INET6;
+                                src_wrapper.sin6_addr = source_ip;
+                                src_wrapper.sin6_port = htons(index);
+
                         
-                        char target_ip_str[INET6_ADDRSTRLEN];
-                        inet_ntop(AF_INET6, &target, target_ip_str, sizeof(target_ip_str));
+                                if (bind(raw_socket_send, (struct sockaddr *)&src_wrapper, sizeof(src_wrapper)) == -1) { //binding the socket to source ip
+                        
+                                        fprintf(stderr,"Error: Binding source IP failed.\n");
+                                        close(raw_socket_send);
+                                        close(raw_socket_recieve);
+                                        return false;
+                        
+                                }
+
+                                struct udphdr udp_header;
+                                
+                                char target_ip_str[INET6_ADDRSTRLEN];
+                                inet_ntop(AF_INET6, &target, target_ip_str, sizeof(target_ip_str));
 
                                 construct_udp_header(&target, (uint16_t) index, &udp_header, true, &source_ip);
                                 
@@ -640,6 +649,7 @@ bool scan_udp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr sou
 
                                 }
 
+                        close(raw_socket_send);
                         sleep(1); //waiting a second after each udp request so that i don't get blacklisted from any server
 
                 }
@@ -647,7 +657,6 @@ bool scan_udp_ipv6(struct in6_addr target, int* ports_array, struct in6_addr sou
         }
 
         close(raw_socket_recieve);
-        close(raw_socket_send);
         return true;
         
 }
