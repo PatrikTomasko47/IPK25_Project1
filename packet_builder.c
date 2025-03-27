@@ -14,25 +14,25 @@
 uint16_t sum_calculator(void *data, int length){
         uint32_t sum = 0;
         uint16_t o_byte = 0; // odd_byte
-        uint16_t* pointer = (uint16_t *)data;
+        uint16_t* pointer = (uint16_t*)data;
         
         while(length > 1){
 
                 sum = sum + *pointer++;
-                length -= 2;
+                length = length - 2;
 
         }
         
         if(length == 1){
 
                 *(unsigned char*)(&o_byte) = *(unsigned char*)pointer; //adding the odd_byte value
-                sum += o_byte;
+                sum = sum + o_byte;
 
         }
         
         uint32_t carry = sum >> 16;
         sum = (sum & 0xFFFF) + carry; //adding upper bits to the lower ones
-        sum += (sum >> 16); //adding any leftover carry
+        sum = sum + (sum >> 16); //adding any leftover carry
         return ~sum; //invert
 }
 

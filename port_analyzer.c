@@ -12,6 +12,7 @@
 #include <netinet/icmp6.h>
 #include <arpa/inet.h>
 #include <sys/select.h>
+#include <sys/time.h>
 
 #include "port_analyzer.h"
 #include "packet_builder.h"
@@ -205,18 +206,39 @@ bool scan_tcp_ipv4(uint32_t source_ip, int* ports_array, uint32_t target, int ti
 
 
                                 fd_set read_content;
-                                FD_ZERO(&read_content);
-                                FD_SET(raw_socket, &read_content);
 
-                                struct timeval timeout_struct;
-                                timeout_struct.tv_usec = (timeout % 1000) * 1000;
-                                timeout_struct.tv_sec = timeout / 1000;
+                                struct timeval timeout_struct, start_time, recieve_time;
+
+                                int elapsed_time = 0;
+
+                                gettimeofday(&start_time, NULL);
 
                                 int matching_ips = 1; //used to determine and await a packet coming from the correct IP address
 
                                 while(matching_ips == 1){
 
-                                        int waiter = select(raw_socket + 1, &read_content, NULL, NULL, &timeout_struct);
+                                        gettimeofday(&recieve_time, NULL);
+
+                                        elapsed_time = (recieve_time.tv_sec - start_time.tv_sec) * 1000 + (recieve_time.tv_usec - start_time.tv_usec) / 1000;
+
+                                        int remaining_time = timeout - elapsed_time; //updating the time in case of recieving a packet that is not from the scanning target
+
+                                        if(remaining_time < 0)
+                                                remaining_time = 0;
+
+                                        int waiter = 0;
+
+                                        if(remaining_time != 0){
+
+                                                timeout_struct.tv_sec = remaining_time / 1000;
+                                                timeout_struct.tv_usec = (remaining_time % 1000) * 1000;
+
+                                                FD_ZERO(&read_content);
+                                                FD_SET(raw_socket, &read_content);
+
+                                                waiter = select(raw_socket + 1, &read_content, NULL, NULL, &timeout_struct);
+
+                                        }
 
                                         if(waiter < 0){
 
