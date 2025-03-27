@@ -1,0 +1,3 @@
+Error: The values in the port range are in the wrong order or out of the allowed range.
+The value to the left (20) has to be smaller than the value on the right (70500) and both have to be inside 0-65535.
+1

@@ -1,0 +1,4 @@
+8.8.8.8 52 tcp filtered
+8.8.8.8 53 tcp open
+8.8.8.8 54 tcp filtered
+0

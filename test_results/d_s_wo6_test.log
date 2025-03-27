@@ -1,0 +1,10 @@
+45.33.32.156 52 tcp filtered
+45.33.32.156 53 tcp filtered
+45.33.32.156 55 tcp filtered
+45.33.32.156 51 udp open
+45.33.32.156 52 udp open
+45.33.32.156 53 udp open
+45.33.32.156 54 udp open
+45.33.32.156 55 udp open
+Skipping IPV6 since the chosen interface has no suitable IPV6 address.
+0

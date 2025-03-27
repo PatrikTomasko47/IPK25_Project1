@@ -1,0 +1,43 @@
+Usage:
+  ./ipk-l4-scan [-i interface | --interface interface]
+                [--pt port-ranges | --pu port-ranges] | [-t port-ranges | -u port-ranges]
+                [-w timeout | --wait timeout]
+                [hostname | ip-address | 'localhost']
+
+Options:
+  -h, --help
+      Show this help message.
+
+  -i interface, --interface interface
+      Select the network interface for scanning (e.g., eth0).
+      If only an empty interface flag is detected or no input value at all, lists all active interfaces.
+
+  -t port-ranges, --pt port-ranges
+      Specify TCP ports to scan.
+        e.g., --pt 22,80-85,443
+
+  -u port-ranges, --pu port-ranges
+      Specify UDP ports to scan.
+        e.g., --pu 53,67-69,161-162
+
+  -w timeout, --wait timeout
+      Set the timeout in milliseconds to wait for a response per scanned port.
+      Default is 5000 ms.
+
+  hostname | ip-address
+      Target domain name or IPv4/IPv6 address or localhost to scan.
+
+Examples:
+  ./ipk-l4-scan --interface eth0 -t 22,80-85 -u 53,67-69 example.com
+  ./ipk-l4-scan -i eth0 --pt 22,443 --pu 53 192.168.1.1
+  ./ipk-l4-scan --interface       # Lists all available interfaces
+
+Output Format:
+  Each result of a scan is printed as a single line in the format:
+    [IP address] [port number] [protocol] [status]
+
+  Example output:
+    127.0.0.1 22 tcp open
+    127.0.0.1 53 udp closed
+
+Note that if you want to use the program and have it function properly you either have to launch it with sudo or use 'make setuid' to give it the necessary privileges.0
